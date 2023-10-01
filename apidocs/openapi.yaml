@@ -53,6 +53,8 @@ components:
           type: string
         runOnConnectRestart:
           type: boolean
+        runOnDisconnect:
+          type: string
 
         # RTSP
         rtsp:
@@ -175,6 +177,20 @@ components:
         srtAddress:
           type: string
 
+        # Record
+        record:
+          type: boolean
+        recordPath:
+          type: string
+        recordFormat:
+          type: string
+        recordPartDuration:
+          type: string
+        recordSegmentDuration:
+          type: string
+        recordDeleteAfter:
+          type: string
+
         # Paths
         paths:
           type: object
@@ -196,7 +212,11 @@ components:
         sourceOnDemandCloseAfter:
           type: string
         maxReaders:
-          type: number
+          type: integer
+        srtReadPassphrase:
+          type: string
+        record:
+          type: boolean
 
         # Authentication
         publishUser:
@@ -220,6 +240,8 @@ components:
         overridePublisher:
           type: boolean
         fallback:
+          type: string
+        srtPublishPassphrase:
           type: string
 
         # RTSP
@@ -302,7 +324,7 @@ components:
         rpiCameraTextOverlay:
           type: string
 
-        # External commands
+        # Hooks
         runOnInit:
           type: string
         runOnInitRestart:
@@ -319,10 +341,16 @@ components:
           type: string
         runOnReadyRestart:
           type: boolean
+        runOnNotReady:
+          type: string
         runOnRead:
           type: string
         runOnReadRestart:
           type: boolean
+        runOnUnread:
+          type: string
+        runOnRecordSegmentComplete:
+          type: string
 
     Path:
       type: object
@@ -335,6 +363,7 @@ components:
           $ref: '#/components/schemas/PathConf'
         source:
           $ref: '#/components/schemas/PathSourceOrReader'
+          nullable: true
         ready:
           type: boolean
         readyTime:
@@ -691,13 +720,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -747,13 +776,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -803,13 +832,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -859,13 +888,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -937,13 +966,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -993,13 +1022,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -1073,13 +1102,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -1151,13 +1180,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -1229,13 +1258,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':
@@ -1307,13 +1336,13 @@ paths:
         in: query
         description: page number.
         schema:
-          type: number
+          type: integer
           default: 0
       - name: itemsPerPage
         in: query
         description: items per page.
         schema:
-          type: number
+          type: integer
           default: 100
       responses:
         '200':

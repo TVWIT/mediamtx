@@ -168,7 +168,7 @@ func (s *hlsSource) run(ctx context.Context, cnf *conf.PathConf, reloadConf chan
 					}
 
 					c.OnDataMPEG4Audio(track, func(pts time.Duration, aus [][]byte) {
-						stream.WriteUnit(medi, medi.Formats[0], &unit.MPEG4AudioGeneric{
+						stream.WriteUnit(medi, medi.Formats[0], &unit.MPEG4Audio{
 							Base: unit.Base{
 								NTP: time.Now(),
 								PTS: pts,
@@ -236,8 +236,8 @@ func (s *hlsSource) run(ctx context.Context, cnf *conf.PathConf, reloadConf chan
 }
 
 // apiSourceDescribe implements sourceStaticImpl.
-func (*hlsSource) apiSourceDescribe() pathAPISourceOrReader {
-	return pathAPISourceOrReader{
+func (*hlsSource) apiSourceDescribe() apiPathSourceOrReader {
+	return apiPathSourceOrReader{
 		Type: "hlsSource",
 		ID:   "",
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/pion/webrtc/v3"
 
 	"github.com/bluenviron/mediamtx/internal/asyncwriter"
+	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/webrtcpc"
 )
@@ -176,12 +177,13 @@ type webRTCSessionPathManager interface {
 }
 
 type webRTCSession struct {
-	writeQueueSize int
-	api            *webrtc.API
-	req            webRTCNewSessionReq
-	wg             *sync.WaitGroup
-	pathManager    webRTCSessionPathManager
-	parent         *webRTCManager
+	writeQueueSize  int
+	api             *webrtc.API
+	req             webRTCNewSessionReq
+	wg              *sync.WaitGroup
+	externalCmdPool *externalcmd.Pool
+	pathManager     webRTCSessionPathManager
+	parent          *webRTCManager
 
 	ctx       context.Context
 	ctxCancel func()
@@ -201,6 +203,7 @@ func newWebRTCSession(
 	api *webrtc.API,
 	req webRTCNewSessionReq,
 	wg *sync.WaitGroup,
+	externalCmdPool *externalcmd.Pool,
 	pathManager webRTCSessionPathManager,
 	parent *webRTCManager,
 ) *webRTCSession {
@@ -211,8 +214,9 @@ func newWebRTCSession(
 		api:             api,
 		req:             req,
 		wg:              wg,
-		parent:          parent,
+		externalCmdPool: externalCmdPool,
 		pathManager:     pathManager,
+		parent:          parent,
 		ctx:             ctx,
 		ctxCancel:       ctxCancel,
 		created:         time.Now(),
@@ -523,6 +527,46 @@ func (s *webRTCSession) runRead() (int, error) {
 	s.Log(logger.Info, "is reading from path '%s', %s",
 		res.path.name, sourceMediaInfo(webrtcMediasOfOutgoingTracks(tracks)))
 
+	pathConf := res.path.safeConf()
+
+	if pathConf.RunOnRead != "" {
+		env := res.path.externalCmdEnv()
+		desc := s.apiReaderDescribe()
+		env["MTX_READER_TYPE"] = desc.Type
+		env["MTX_READER_ID"] = desc.ID
+
+		s.Log(logger.Info, "runOnRead command started")
+		onReadCmd := externalcmd.NewCmd(
+			s.externalCmdPool,
+			pathConf.RunOnRead,
+			pathConf.RunOnReadRestart,
+			env,
+			func(err error) {
+				s.Log(logger.Info, "runOnRead command exited: %v", err)
+			})
+		defer func() {
+			onReadCmd.Close()
+			s.Log(logger.Info, "runOnRead command stopped")
+		}()
+	}
+
+	if pathConf.RunOnUnread != "" {
+		defer func() {
+			env := res.path.externalCmdEnv()
+			desc := s.apiReaderDescribe()
+			env["MTX_READER_TYPE"] = desc.Type
+			env["MTX_READER_ID"] = desc.ID
+
+			s.Log(logger.Info, "runOnUnread command launched")
+			externalcmd.NewCmd(
+				s.externalCmdPool,
+				pathConf.RunOnUnread,
+				false,
+				env,
+				nil)
+		}()
+	}
+
 	writer.Start()
 
 	select {
@@ -589,15 +633,15 @@ func (s *webRTCSession) addCandidates(
 }
 
 // apiSourceDescribe implements sourceStaticImpl.
-func (s *webRTCSession) apiSourceDescribe() pathAPISourceOrReader {
-	return pathAPISourceOrReader{
+func (s *webRTCSession) apiSourceDescribe() apiPathSourceOrReader {
+	return apiPathSourceOrReader{
 		Type: "webRTCSession",
 		ID:   s.uuid.String(),
 	}
 }
 
 // apiReaderDescribe implements reader.
-func (s *webRTCSession) apiReaderDescribe() pathAPISourceOrReader {
+func (s *webRTCSession) apiReaderDescribe() apiPathSourceOrReader {
 	return s.apiSourceDescribe()
 }
 

@@ -48,6 +48,7 @@ type rtspServer struct {
 	protocols           map[conf.Protocol]struct{}
 	runOnConnect        string
 	runOnConnectRestart bool
+	runOnDisconnect     string
 	externalCmdPool     *externalcmd.Pool
 	metrics             *metrics
 	pathManager         *pathManager
@@ -82,6 +83,7 @@ func newRTSPServer(
 	protocols map[conf.Protocol]struct{},
 	runOnConnect string,
 	runOnConnectRestart bool,
+	runOnDisconnect string,
 	externalCmdPool *externalcmd.Pool,
 	metrics *metrics,
 	pathManager *pathManager,
@@ -97,6 +99,7 @@ func newRTSPServer(
 		protocols:           protocols,
 		runOnConnect:        runOnConnect,
 		runOnConnectRestart: runOnConnectRestart,
+		runOnDisconnect:     runOnDisconnect,
 		externalCmdPool:     externalCmdPool,
 		metrics:             metrics,
 		pathManager:         pathManager,
@@ -214,11 +217,13 @@ outer:
 // OnConnOpen implements gortsplib.ServerHandlerOnConnOpen.
 func (s *rtspServer) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 	c := newRTSPConn(
+		s.isTLS,
 		s.rtspAddress,
 		s.authMethods,
 		s.readTimeout,
 		s.runOnConnect,
 		s.runOnConnectRestart,
+		s.runOnDisconnect,
 		s.externalCmdPool,
 		s.pathManager,
 		ctx.Conn,

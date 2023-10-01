@@ -12,6 +12,7 @@ import (
 
 	"github.com/bluenviron/gortsplib/v4/pkg/description"
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
+	"github.com/bluenviron/mediacommon/pkg/codecs/ac3"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
 	"github.com/bluenviron/mediacommon/pkg/formats/mpegts"
@@ -28,6 +29,23 @@ import (
 
 func durationGoToMPEGTS(v time.Duration) int64 {
 	return int64(v.Seconds() * 90000)
+}
+
+func srtCheckPassphrase(connReq srt.ConnRequest, passphrase string) error {
+	if passphrase == "" {
+		return nil
+	}
+
+	if !connReq.IsEncrypted() {
+		return fmt.Errorf("connection is encrypted, but not passphrase is defined in configuration")
+	}
+
+	err := connReq.SetPassphrase(passphrase)
+	if err != nil {
+		return fmt.Errorf("invalid passphrase")
+	}
+
+	return nil
 }
 
 type srtConnState int
@@ -48,6 +66,9 @@ type srtConnParent interface {
 }
 
 type srtConn struct {
+	*conn
+
+	rtspAddress       string
 	readTimeout       conf.StringDuration
 	writeTimeout      conf.StringDuration
 	writeQueueSize    int
@@ -65,7 +86,7 @@ type srtConn struct {
 	mutex     sync.RWMutex
 	state     srtConnState
 	pathName  string
-	conn      srt.Conn
+	sconn     srt.Conn
 
 	chNew     chan srtNewConnReq
 	chSetConn chan srt.Conn
@@ -73,11 +94,15 @@ type srtConn struct {
 
 func newSRTConn(
 	parentCtx context.Context,
+	rtspAddress string,
 	readTimeout conf.StringDuration,
 	writeTimeout conf.StringDuration,
 	writeQueueSize int,
 	udpMaxPayloadSize int,
 	connReq srt.ConnRequest,
+	runOnConnect string,
+	runOnConnectRestart bool,
+	runOnDisconnect string,
 	wg *sync.WaitGroup,
 	externalCmdPool *externalcmd.Pool,
 	pathManager srtConnPathManager,
@@ -86,6 +111,7 @@ func newSRTConn(
 	ctx, ctxCancel := context.WithCancel(parentCtx)
 
 	c := &srtConn{
+		rtspAddress:       rtspAddress,
 		readTimeout:       readTimeout,
 		writeTimeout:      writeTimeout,
 		writeQueueSize:    writeQueueSize,
@@ -102,6 +128,15 @@ func newSRTConn(
 		chNew:             make(chan srtNewConnReq),
 		chSetConn:         make(chan srt.Conn),
 	}
+
+	c.conn = newConn(
+		rtspAddress,
+		runOnConnect,
+		runOnConnectRestart,
+		runOnDisconnect,
+		externalCmdPool,
+		c,
+	)
 
 	c.Log(logger.Info, "opened")
 
@@ -123,8 +158,12 @@ func (c *srtConn) ip() net.IP {
 	return c.connReq.RemoteAddr().(*net.UDPAddr).IP
 }
 
-func (c *srtConn) run() {
+func (c *srtConn) run() { //nolint:dupl
 	defer c.wg.Done()
+
+	desc := c.apiReaderDescribe()
+	c.conn.open(desc)
+	defer c.conn.close(desc)
 
 	err := c.runInner()
 
@@ -200,6 +239,11 @@ func (c *srtConn) runPublish(req srtNewConnReq, pathName string, user string, pa
 
 	defer res.path.removePublisher(pathRemovePublisherReq{author: c})
 
+	err := srtCheckPassphrase(req.connReq, res.path.conf.SRTPublishPassphrase)
+	if err != nil {
+		return false, err
+	}
+
 	sconn, err := c.exchangeRequestWithConn(req)
 	if err != nil {
 		return true, err
@@ -208,7 +252,7 @@ func (c *srtConn) runPublish(req srtNewConnReq, pathName string, user string, pa
 	c.mutex.Lock()
 	c.state = srtConnStatePublish
 	c.pathName = pathName
-	c.conn = sconn
+	c.sconn = sconn
 	c.mutex.Unlock()
 
 	readerErr := make(chan error)
@@ -241,129 +285,11 @@ func (c *srtConn) runPublishReader(sconn srt.Conn, path *path) error {
 		decodeErrLogger.Log(logger.Warn, err.Error())
 	})
 
-	var medias []*description.Media //nolint:prealloc
 	var stream *stream.Stream
 
-	var td *mpegts.TimeDecoder
-	decodeTime := func(t int64) time.Duration {
-		if td == nil {
-			td = mpegts.NewTimeDecoder(t)
-		}
-		return td.Decode(t)
-	}
-
-	for _, track := range r.Tracks() { //nolint:dupl
-		var medi *description.Media
-
-		switch tcodec := track.Codec.(type) {
-		case *mpegts.CodecH265:
-			medi = &description.Media{
-				Type: description.MediaTypeVideo,
-				Formats: []format.Format{&format.H265{
-					PayloadTyp: 96,
-				}},
-			}
-
-			r.OnDataH26x(track, func(pts int64, _ int64, au [][]byte) error {
-				stream.WriteUnit(medi, medi.Formats[0], &unit.H265{
-					Base: unit.Base{
-						NTP: time.Now(),
-						PTS: decodeTime(pts),
-					},
-					AU: au,
-				})
-				return nil
-			})
-
-		case *mpegts.CodecH264:
-			medi = &description.Media{
-				Type: description.MediaTypeVideo,
-				Formats: []format.Format{&format.H264{
-					PayloadTyp:        96,
-					PacketizationMode: 1,
-				}},
-			}
-
-			r.OnDataH26x(track, func(pts int64, _ int64, au [][]byte) error {
-				stream.WriteUnit(medi, medi.Formats[0], &unit.H264{
-					Base: unit.Base{
-						NTP: time.Now(),
-						PTS: decodeTime(pts),
-					},
-					AU: au,
-				})
-				return nil
-			})
-
-		case *mpegts.CodecOpus:
-			medi = &description.Media{
-				Type: description.MediaTypeAudio,
-				Formats: []format.Format{&format.Opus{
-					PayloadTyp: 96,
-					IsStereo:   (tcodec.ChannelCount == 2),
-				}},
-			}
-
-			r.OnDataOpus(track, func(pts int64, packets [][]byte) error {
-				stream.WriteUnit(medi, medi.Formats[0], &unit.Opus{
-					Base: unit.Base{
-						NTP: time.Now(),
-						PTS: decodeTime(pts),
-					},
-					Packets: packets,
-				})
-				return nil
-			})
-
-		case *mpegts.CodecMPEG4Audio:
-			medi = &description.Media{
-				Type: description.MediaTypeAudio,
-				Formats: []format.Format{&format.MPEG4Audio{
-					PayloadTyp:       96,
-					SizeLength:       13,
-					IndexLength:      3,
-					IndexDeltaLength: 3,
-					Config:           &tcodec.Config,
-				}},
-			}
-
-			r.OnDataMPEG4Audio(track, func(pts int64, aus [][]byte) error {
-				stream.WriteUnit(medi, medi.Formats[0], &unit.MPEG4AudioGeneric{
-					Base: unit.Base{
-						NTP: time.Now(),
-						PTS: decodeTime(pts),
-					},
-					AUs: aus,
-				})
-				return nil
-			})
-
-		case *mpegts.CodecMPEG1Audio:
-			medi = &description.Media{
-				Type:    description.MediaTypeAudio,
-				Formats: []format.Format{&format.MPEG1Audio{}},
-			}
-
-			r.OnDataMPEG1Audio(track, func(pts int64, frames [][]byte) error {
-				stream.WriteUnit(medi, medi.Formats[0], &unit.MPEG1Audio{
-					Base: unit.Base{
-						NTP: time.Now(),
-						PTS: decodeTime(pts),
-					},
-					Frames: frames,
-				})
-				return nil
-			})
-
-		default:
-			continue
-		}
-
-		medias = append(medias, medi)
-	}
-
-	if len(medias) == 0 {
-		return fmt.Errorf("no supported tracks found")
+	medias, err := mpegtsSetupTracks(r, &stream)
+	if err != nil {
+		return err
 	}
 
 	rres := path.startPublisher(pathStartPublisherReq{
@@ -410,6 +336,11 @@ func (c *srtConn) runRead(req srtNewConnReq, pathName string, user string, pass 
 
 	defer res.path.removeReader(pathRemoveReaderReq{author: c})
 
+	err := srtCheckPassphrase(req.connReq, res.path.conf.SRTReadPassphrase)
+	if err != nil {
+		return false, err
+	}
+
 	sconn, err := c.exchangeRequestWithConn(req)
 	if err != nil {
 		return true, err
@@ -419,7 +350,7 @@ func (c *srtConn) runRead(req srtNewConnReq, pathName string, user string, pass 
 	c.mutex.Lock()
 	c.state = srtConnStateRead
 	c.pathName = pathName
-	c.conn = sconn
+	c.sconn = sconn
 	c.mutex.Unlock()
 
 	writer := asyncwriter.New(c.writeQueueSize, c)
@@ -509,13 +440,67 @@ func (c *srtConn) runRead(req srtNewConnReq, pathName string, user string, pass 
 					return bw.Flush()
 				})
 
-			case *format.MPEG4AudioGeneric:
+			case *format.MPEG4Video:
+				track := addTrack(medi, &mpegts.CodecMPEG4Video{})
+
+				firstReceived := false
+				var lastPTS time.Duration
+
+				res.stream.AddReader(writer, medi, forma, func(u unit.Unit) error {
+					tunit := u.(*unit.MPEG4Video)
+					if tunit.Frame == nil {
+						return nil
+					}
+
+					if !firstReceived {
+						firstReceived = true
+					} else if tunit.PTS < lastPTS {
+						return fmt.Errorf("MPEG-4 Video streams with B-frames are not supported (yet)")
+					}
+					lastPTS = tunit.PTS
+
+					sconn.SetWriteDeadline(time.Now().Add(time.Duration(c.writeTimeout)))
+					err = w.WriteMPEG4Video(track, durationGoToMPEGTS(tunit.PTS), tunit.Frame)
+					if err != nil {
+						return err
+					}
+					return bw.Flush()
+				})
+
+			case *format.MPEG1Video:
+				track := addTrack(medi, &mpegts.CodecMPEG1Video{})
+
+				firstReceived := false
+				var lastPTS time.Duration
+
+				res.stream.AddReader(writer, medi, forma, func(u unit.Unit) error {
+					tunit := u.(*unit.MPEG1Video)
+					if tunit.Frame == nil {
+						return nil
+					}
+
+					if !firstReceived {
+						firstReceived = true
+					} else if tunit.PTS < lastPTS {
+						return fmt.Errorf("MPEG-1 Video streams with B-frames are not supported (yet)")
+					}
+					lastPTS = tunit.PTS
+
+					sconn.SetWriteDeadline(time.Now().Add(time.Duration(c.writeTimeout)))
+					err = w.WriteMPEG1Video(track, durationGoToMPEGTS(tunit.PTS), tunit.Frame)
+					if err != nil {
+						return err
+					}
+					return bw.Flush()
+				})
+
+			case *format.MPEG4Audio:
 				track := addTrack(medi, &mpegts.CodecMPEG4Audio{
-					Config: *forma.Config,
+					Config: *forma.GetConfig(),
 				})
 
 				res.stream.AddReader(writer, medi, forma, func(u unit.Unit) error {
-					tunit := u.(*unit.MPEG4AudioGeneric)
+					tunit := u.(*unit.MPEG4Audio)
 					if tunit.AUs == nil {
 						return nil
 					}
@@ -527,29 +512,6 @@ func (c *srtConn) runRead(req srtNewConnReq, pathName string, user string, pass 
 					}
 					return bw.Flush()
 				})
-
-			case *format.MPEG4AudioLATM:
-				if forma.Config != nil &&
-					len(forma.Config.Programs) == 1 &&
-					len(forma.Config.Programs[0].Layers) == 1 {
-					track := addTrack(medi, &mpegts.CodecMPEG4Audio{
-						Config: *forma.Config.Programs[0].Layers[0].AudioSpecificConfig,
-					})
-
-					res.stream.AddReader(writer, medi, forma, func(u unit.Unit) error {
-						tunit := u.(*unit.MPEG4AudioLATM)
-						if tunit.AU == nil {
-							return nil
-						}
-
-						sconn.SetWriteDeadline(time.Now().Add(time.Duration(c.writeTimeout)))
-						err = w.WriteMPEG4Audio(track, durationGoToMPEGTS(tunit.PTS), [][]byte{tunit.AU})
-						if err != nil {
-							return err
-						}
-						return bw.Flush()
-					})
-				}
 
 			case *format.Opus:
 				track := addTrack(medi, &mpegts.CodecOpus{
@@ -591,6 +553,30 @@ func (c *srtConn) runRead(req srtNewConnReq, pathName string, user string, pass 
 					}
 					return bw.Flush()
 				})
+
+			case *format.AC3:
+				track := addTrack(medi, &mpegts.CodecAC3{})
+
+				sampleRate := time.Duration(forma.SampleRate)
+
+				res.stream.AddReader(writer, medi, forma, func(u unit.Unit) error {
+					tunit := u.(*unit.AC3)
+					if tunit.Frames == nil {
+						return nil
+					}
+
+					for i, frame := range tunit.Frames {
+						framePTS := tunit.PTS + time.Duration(i)*ac3.SamplesPerFrame*
+							time.Second/sampleRate
+
+						sconn.SetWriteDeadline(time.Now().Add(time.Duration(c.writeTimeout)))
+						err = w.WriteAC3(track, durationGoToMPEGTS(framePTS), frame)
+						if err != nil {
+							return err
+						}
+					}
+					return bw.Flush()
+				})
 			}
 		}
 	}
@@ -606,18 +592,40 @@ func (c *srtConn) runRead(req srtNewConnReq, pathName string, user string, pass 
 	pathConf := res.path.safeConf()
 
 	if pathConf.RunOnRead != "" {
+		env := res.path.externalCmdEnv()
+		desc := c.apiReaderDescribe()
+		env["MTX_READER_TYPE"] = desc.Type
+		env["MTX_READER_ID"] = desc.ID
+
 		c.Log(logger.Info, "runOnRead command started")
 		onReadCmd := externalcmd.NewCmd(
 			c.externalCmdPool,
 			pathConf.RunOnRead,
 			pathConf.RunOnReadRestart,
-			res.path.externalCmdEnv(),
+			env,
 			func(err error) {
 				c.Log(logger.Info, "runOnRead command exited: %v", err)
 			})
 		defer func() {
 			onReadCmd.Close()
 			c.Log(logger.Info, "runOnRead command stopped")
+		}()
+	}
+
+	if pathConf.RunOnUnread != "" {
+		defer func() {
+			env := res.path.externalCmdEnv()
+			desc := c.apiReaderDescribe()
+			env["MTX_READER_TYPE"] = desc.Type
+			env["MTX_READER_ID"] = desc.ID
+
+			c.Log(logger.Info, "runOnUnread command launched")
+			externalcmd.NewCmd(
+				c.externalCmdPool,
+				pathConf.RunOnUnread,
+				false,
+				env,
+				nil)
 		}()
 	}
 
@@ -670,15 +678,15 @@ func (c *srtConn) setConn(sconn srt.Conn) {
 }
 
 // apiReaderDescribe implements reader.
-func (c *srtConn) apiReaderDescribe() pathAPISourceOrReader {
-	return pathAPISourceOrReader{
+func (c *srtConn) apiReaderDescribe() apiPathSourceOrReader {
+	return apiPathSourceOrReader{
 		Type: "srtConn",
 		ID:   c.uuid.String(),
 	}
 }
 
 // apiSourceDescribe implements source.
-func (c *srtConn) apiSourceDescribe() pathAPISourceOrReader {
+func (c *srtConn) apiSourceDescribe() apiPathSourceOrReader {
 	return c.apiReaderDescribe()
 }
 
@@ -689,9 +697,9 @@ func (c *srtConn) apiItem() *apiSRTConn {
 	bytesReceived := uint64(0)
 	bytesSent := uint64(0)
 
-	if c.conn != nil {
+	if c.sconn != nil {
 		var s srt.Statistics
-		c.conn.Stats(&s)
+		c.sconn.Stats(&s)
 		bytesReceived = s.Accumulated.ByteRecv
 		bytesSent = s.Accumulated.ByteSent
 	}

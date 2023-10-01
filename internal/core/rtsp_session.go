@@ -96,14 +96,32 @@ func (s *rtspSession) Log(level logger.Level, format string, args ...interface{}
 	s.parent.Log(level, "[session %s] "+format, append([]interface{}{id}, args...)...)
 }
 
+func (s *rtspSession) onUnread() {
+	if s.onReadCmd != nil {
+		s.Log(logger.Info, "runOnRead command stopped")
+		s.onReadCmd.Close()
+	}
+
+	if s.path.conf.RunOnUnread != "" {
+		env := s.path.externalCmdEnv()
+		desc := s.apiReaderDescribe()
+		env["MTX_READER_TYPE"] = desc.Type
+		env["MTX_READER_ID"] = desc.ID
+
+		s.Log(logger.Info, "runOnUnread command launched")
+		externalcmd.NewCmd(
+			s.externalCmdPool,
+			s.path.conf.RunOnUnread,
+			false,
+			env,
+			nil)
+	}
+}
+
 // onClose is called by rtspServer.
 func (s *rtspSession) onClose(err error) {
 	if s.session.State() == gortsplib.ServerSessionStatePlay {
-		if s.onReadCmd != nil {
-			s.onReadCmd.Close()
-			s.onReadCmd = nil
-			s.Log(logger.Info, "runOnRead command stopped")
-		}
+		s.onUnread()
 	}
 
 	switch s.session.State() {
@@ -295,12 +313,17 @@ func (s *rtspSession) onPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (*base.Respons
 		pathConf := s.path.safeConf()
 
 		if pathConf.RunOnRead != "" {
+			env := s.path.externalCmdEnv()
+			desc := s.apiReaderDescribe()
+			env["MTX_READER_TYPE"] = desc.Type
+			env["MTX_READER_ID"] = desc.ID
+
 			s.Log(logger.Info, "runOnRead command started")
 			s.onReadCmd = externalcmd.NewCmd(
 				s.externalCmdPool,
 				pathConf.RunOnRead,
 				pathConf.RunOnReadRestart,
-				s.path.externalCmdEnv(),
+				env,
 				func(err error) {
 					s.Log(logger.Info, "runOnRead command exited: %v", err)
 				})
@@ -363,10 +386,7 @@ func (s *rtspSession) onRecord(_ *gortsplib.ServerHandlerOnRecordCtx) (*base.Res
 func (s *rtspSession) onPause(_ *gortsplib.ServerHandlerOnPauseCtx) (*base.Response, error) {
 	switch s.session.State() {
 	case gortsplib.ServerSessionStatePlay:
-		if s.onReadCmd != nil {
-			s.Log(logger.Info, "runOnRead command stopped")
-			s.onReadCmd.Close()
-		}
+		s.onUnread()
 
 		s.mutex.Lock()
 		s.state = gortsplib.ServerSessionStatePrePlay
@@ -386,8 +406,8 @@ func (s *rtspSession) onPause(_ *gortsplib.ServerHandlerOnPauseCtx) (*base.Respo
 }
 
 // apiReaderDescribe implements reader.
-func (s *rtspSession) apiReaderDescribe() pathAPISourceOrReader {
-	return pathAPISourceOrReader{
+func (s *rtspSession) apiReaderDescribe() apiPathSourceOrReader {
+	return apiPathSourceOrReader{
 		Type: func() string {
 			if s.isTLS {
 				return "rtspsSession"
@@ -399,7 +419,7 @@ func (s *rtspSession) apiReaderDescribe() pathAPISourceOrReader {
 }
 
 // apiSourceDescribe implements source.
-func (s *rtspSession) apiSourceDescribe() pathAPISourceOrReader {
+func (s *rtspSession) apiSourceDescribe() apiPathSourceOrReader {
 	return s.apiReaderDescribe()
 }
 

@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gortsplib/v4/pkg/description"
@@ -16,6 +15,7 @@ import (
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/record"
 	"github.com/bluenviron/mediamtx/internal/stream"
 )
 
@@ -145,11 +145,6 @@ type pathStopPublisherReq struct {
 	res    chan struct{}
 }
 
-type pathAPISourceOrReader struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
-}
-
 type pathAPIPathsListRes struct {
 	data  *apiPathsList
 	paths map[string]*path
@@ -171,26 +166,30 @@ type pathAPIPathsGetReq struct {
 }
 
 type path struct {
-	rtspAddress       string
-	readTimeout       conf.StringDuration
-	writeTimeout      conf.StringDuration
-	writeQueueSize    int
-	udpMaxPayloadSize int
-	confName          string
-	conf              *conf.PathConf
-	name              string
-	matches           []string
-	wg                *sync.WaitGroup
-	externalCmdPool   *externalcmd.Pool
-	parent            pathParent
+	rtspAddress           string
+	readTimeout           conf.StringDuration
+	writeTimeout          conf.StringDuration
+	writeQueueSize        int
+	udpMaxPayloadSize     int
+	record                bool
+	recordPath            string
+	recordPartDuration    conf.StringDuration
+	recordSegmentDuration conf.StringDuration
+	confName              string
+	conf                  *conf.PathConf
+	name                  string
+	matches               []string
+	wg                    *sync.WaitGroup
+	externalCmdPool       *externalcmd.Pool
+	parent                pathParent
 
 	ctx                            context.Context
 	ctxCancel                      func()
 	confMutex                      sync.RWMutex
 	source                         source
 	stream                         *stream.Stream
+	recordAgent                    *record.Agent
 	readyTime                      time.Time
-	bytesReceived                  *uint64
 	readers                        map[reader]struct{}
 	describeRequestsOnHold         []pathDescribeReq
 	readerAddRequestsOnHold        []pathAddReaderReq
@@ -227,6 +226,10 @@ func newPath(
 	writeTimeout conf.StringDuration,
 	writeQueueSize int,
 	udpMaxPayloadSize int,
+	record bool,
+	recordPath string,
+	recordPartDuration conf.StringDuration,
+	recordSegmentDuration conf.StringDuration,
 	confName string,
 	cnf *conf.PathConf,
 	name string,
@@ -243,6 +246,10 @@ func newPath(
 		writeTimeout:                   writeTimeout,
 		writeQueueSize:                 writeQueueSize,
 		udpMaxPayloadSize:              udpMaxPayloadSize,
+		record:                         record,
+		recordPath:                     recordPath,
+		recordPartDuration:             recordPartDuration,
+		recordSegmentDuration:          recordSegmentDuration,
 		confName:                       confName,
 		conf:                           cnf,
 		name:                           name,
@@ -252,7 +259,6 @@ func newPath(
 		parent:                         parent,
 		ctx:                            ctx,
 		ctxCancel:                      ctxCancel,
-		bytesReceived:                  new(uint64),
 		readers:                        make(map[reader]struct{}),
 		onDemandStaticSourceReadyTimer: newEmptyTimer(),
 		onDemandStaticSourceCloseTimer: newEmptyTimer(),
@@ -291,12 +297,6 @@ func (pa *path) wait() {
 // Log is the main logging function.
 func (pa *path) Log(level logger.Level, format string, args ...interface{}) {
 	pa.parent.Log(level, "[path "+pa.name+"] "+format, args...)
-}
-
-func (pa *path) safeConf() *conf.PathConf {
-	pa.confMutex.RLock()
-	defer pa.confMutex.RUnlock()
-	return pa.conf
 }
 
 func (pa *path) run() {
@@ -506,13 +506,22 @@ func (pa *path) doOnDemandPublisherCloseTimer() {
 }
 
 func (pa *path) doReloadConf(newConf *conf.PathConf) {
+	pa.confMutex.Lock()
+	pa.conf = newConf
+	pa.confMutex.Unlock()
+
 	if pa.conf.HasStaticSource() {
 		go pa.source.(*sourceStatic).reloadConf(newConf)
 	}
 
-	pa.confMutex.Lock()
-	pa.conf = newConf
-	pa.confMutex.Unlock()
+	if pa.recordingEnabled() {
+		if pa.stream != nil && pa.recordAgent == nil {
+			pa.startRecording()
+		}
+	} else if pa.recordAgent != nil {
+		pa.recordAgent.Close()
+		pa.recordAgent = nil
+	}
 }
 
 func (pa *path) doSourceStaticSetReady(req pathSourceStaticSetReadyReq) {
@@ -733,11 +742,12 @@ func (pa *path) doAPIPathsGet(req pathAPIPathsGetReq) {
 			Name:     pa.name,
 			ConfName: pa.confName,
 			Conf:     pa.conf,
-			Source: func() interface{} {
+			Source: func() *apiPathSourceOrReader {
 				if pa.source == nil {
 					return nil
 				}
-				return pa.source.apiSourceDescribe()
+				v := pa.source.apiSourceDescribe()
+				return &v
 			}(),
 			SourceReady: pa.stream != nil,
 			Ready:       pa.stream != nil,
@@ -754,9 +764,14 @@ func (pa *path) doAPIPathsGet(req pathAPIPathsGetReq) {
 				}
 				return mediasDescription(pa.stream.Desc().Medias)
 			}(),
-			BytesReceived: atomic.LoadUint64(pa.bytesReceived),
-			Readers: func() []interface{} {
-				ret := []interface{}{}
+			BytesReceived: func() uint64 {
+				if pa.stream == nil {
+					return 0
+				}
+				return pa.stream.BytesReceived()
+			}(),
+			Readers: func() []apiPathSourceOrReader {
+				ret := []apiPathSourceOrReader{}
 				for r := range pa.readers {
 					ret = append(ret, r.apiReaderDescribe())
 				}
@@ -766,12 +781,22 @@ func (pa *path) doAPIPathsGet(req pathAPIPathsGetReq) {
 	}
 }
 
+func (pa *path) safeConf() *conf.PathConf {
+	pa.confMutex.RLock()
+	defer pa.confMutex.RUnlock()
+	return pa.conf
+}
+
 func (pa *path) shouldClose() bool {
 	return pa.conf.Regexp != nil &&
 		pa.source == nil &&
 		len(pa.readers) == 0 &&
 		len(pa.describeRequestsOnHold) == 0 &&
 		len(pa.readerAddRequestsOnHold) == 0
+}
+
+func (pa *path) recordingEnabled() bool {
+	return pa.record && pa.conf.Record
 }
 
 func (pa *path) externalCmdEnv() externalcmd.Environment {
@@ -868,22 +893,30 @@ func (pa *path) setReady(desc *description.Session, allocateEncoder bool) error 
 		pa.udpMaxPayloadSize,
 		desc,
 		allocateEncoder,
-		pa.bytesReceived,
 		logger.NewLimitedLogger(pa.source),
 	)
 	if err != nil {
 		return err
 	}
 
+	if pa.recordingEnabled() {
+		pa.startRecording()
+	}
+
 	pa.readyTime = time.Now()
 
 	if pa.conf.RunOnReady != "" {
+		env := pa.externalCmdEnv()
+		desc := pa.source.apiSourceDescribe()
+		env["MTX_SOURCE_TYPE"] = desc.Type
+		env["MTX_SOURCE_ID"] = desc.ID
+
 		pa.Log(logger.Info, "runOnReady command started")
 		pa.onReadyCmd = externalcmd.NewCmd(
 			pa.externalCmdPool,
 			pa.conf.RunOnReady,
 			pa.conf.RunOnReadyRestart,
-			pa.externalCmdEnv(),
+			env,
 			func(err error) {
 				pa.Log(logger.Info, "runOnReady command exited: %v", err)
 			})
@@ -908,10 +941,56 @@ func (pa *path) setNotReady() {
 		pa.Log(logger.Info, "runOnReady command stopped")
 	}
 
+	if pa.conf.RunOnNotReady != "" {
+		env := pa.externalCmdEnv()
+		desc := pa.source.apiSourceDescribe()
+		env["MTX_SOURCE_TYPE"] = desc.Type
+		env["MTX_SOURCE_ID"] = desc.ID
+
+		pa.Log(logger.Info, "runOnNotReady command launched")
+		externalcmd.NewCmd(
+			pa.externalCmdPool,
+			pa.conf.RunOnNotReady,
+			false,
+			env,
+			nil)
+	}
+
+	if pa.recordAgent != nil {
+		pa.recordAgent.Close()
+		pa.recordAgent = nil
+	}
+
 	if pa.stream != nil {
 		pa.stream.Close()
 		pa.stream = nil
 	}
+}
+
+func (pa *path) startRecording() {
+	pa.recordAgent = record.NewAgent(
+		pa.writeQueueSize,
+		pa.recordPath,
+		time.Duration(pa.recordPartDuration),
+		time.Duration(pa.recordSegmentDuration),
+		pa.name,
+		pa.stream,
+		func(segmentPath string) {
+			if pa.conf.RunOnRecordSegmentComplete != "" {
+				env := pa.externalCmdEnv()
+				env["MTX_SEGMENT_PATH"] = segmentPath
+
+				pa.Log(logger.Info, "runOnRecordSegmentComplete command launched")
+				externalcmd.NewCmd(
+					pa.externalCmdPool,
+					pa.conf.RunOnRecordSegmentComplete,
+					false,
+					env,
+					nil)
+			}
+		},
+		pa,
+	)
 }
 
 func (pa *path) executeRemoveReader(r reader) {

@@ -14,6 +14,8 @@ import (
 func pathConfCanBeUpdated(oldPathConf *conf.PathConf, newPathConf *conf.PathConf) bool {
 	clone := oldPathConf.Clone()
 
+	clone.Record = newPathConf.Record
+
 	clone.RPICameraBrightness = newPathConf.RPICameraBrightness
 	clone.RPICameraContrast = newPathConf.RPICameraContrast
 	clone.RPICameraSaturation = newPathConf.RPICameraSaturation
@@ -71,6 +73,10 @@ type pathManager struct {
 	writeTimeout              conf.StringDuration
 	writeQueueSize            int
 	udpMaxPayloadSize         int
+	record                    bool
+	recordPath                string
+	recordPartDuration        conf.StringDuration
+	recordSegmentDuration     conf.StringDuration
 	pathConfs                 map[string]*conf.PathConf
 	externalCmdPool           *externalcmd.Pool
 	metrics                   *metrics
@@ -105,6 +111,10 @@ func newPathManager(
 	writeTimeout conf.StringDuration,
 	writeQueueSize int,
 	udpMaxPayloadSize int,
+	record bool,
+	recordPath string,
+	recordPartDuration conf.StringDuration,
+	recordSegmentDuration conf.StringDuration,
 	pathConfs map[string]*conf.PathConf,
 	externalCmdPool *externalcmd.Pool,
 	metrics *metrics,
@@ -120,6 +130,10 @@ func newPathManager(
 		writeTimeout:              writeTimeout,
 		writeQueueSize:            writeQueueSize,
 		udpMaxPayloadSize:         udpMaxPayloadSize,
+		record:                    record,
+		recordPath:                recordPath,
+		recordPartDuration:        recordPartDuration,
+		recordSegmentDuration:     recordSegmentDuration,
 		pathConfs:                 pathConfs,
 		externalCmdPool:           externalCmdPool,
 		metrics:                   metrics,
@@ -398,6 +412,10 @@ func (pm *pathManager) createPath(
 		pm.writeTimeout,
 		pm.writeQueueSize,
 		pm.udpMaxPayloadSize,
+		pm.record,
+		pm.recordPath,
+		pm.recordPartDuration,
+		pm.recordSegmentDuration,
 		pathConfName,
 		pathConf,
 		name,

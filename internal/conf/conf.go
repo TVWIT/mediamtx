@@ -4,7 +4,6 @@ package conf
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -32,50 +31,53 @@ func getSortedKeys(paths map[string]*PathConf) []string {
 	return ret
 }
 
-func loadFromFile(fpath string, conf *Conf) (bool, error) {
-	if fpath == "mediamtx.yml" {
-		// give priority to the legacy configuration file, in order not to break
-		// existing setups
-		if _, err := os.Stat("rtsp-simple-server.yml"); err == nil {
-			fpath = "rtsp-simple-server.yml"
+func firstThatExists(paths []string) string {
+	for _, pa := range paths {
+		_, err := os.Stat(pa)
+		if err == nil {
+			return pa
 		}
 	}
+	return ""
+}
 
-	// mediamtx.yml is optional
-	// other configuration files are not
-	if fpath == "mediamtx.yml" || fpath == "rtsp-simple-server.yml" {
-		if _, err := os.Stat(fpath); errors.Is(err, os.ErrNotExist) {
-			// load defaults
+func loadFromFile(fpath string, defaultConfPaths []string, conf *Conf) (string, error) {
+	if fpath == "" {
+		fpath = firstThatExists(defaultConfPaths)
+
+		// when the configuration file is not explicitly set,
+		// it is optional. Load defaults.
+		if fpath == "" {
 			conf.UnmarshalJSON(nil) //nolint:errcheck
-			return false, nil
+			return "", nil
 		}
 	}
 
 	byts, err := os.ReadFile(fpath)
 	if err != nil {
-		return true, err
+		return "", err
 	}
 
 	if key, ok := os.LookupEnv("RTSP_CONFKEY"); ok { // legacy format
 		byts, err = decrypt.Decrypt(key, byts)
 		if err != nil {
-			return true, err
+			return "", err
 		}
 	}
 
 	if key, ok := os.LookupEnv("MTX_CONFKEY"); ok {
 		byts, err = decrypt.Decrypt(key, byts)
 		if err != nil {
-			return true, err
+			return "", err
 		}
 	}
 
 	err = yaml.Load(byts, conf)
 	if err != nil {
-		return true, err
+		return "", err
 	}
 
-	return true, nil
+	return fpath, nil
 }
 
 func contains(list []headers.AuthMethod, item headers.AuthMethod) bool {
@@ -107,6 +109,7 @@ type Conf struct {
 	PPROFAddress              string          `json:"pprofAddress"`
 	RunOnConnect              string          `json:"runOnConnect"`
 	RunOnConnectRestart       bool            `json:"runOnConnectRestart"`
+	RunOnDisconnect           string          `json:"runOnDisconnect"`
 
 	// RTSP
 	RTSP              bool        `json:"rtsp"`
@@ -169,35 +172,43 @@ type Conf struct {
 	SRT        bool   `json:"srt"`
 	SRTAddress string `json:"srtAddress"`
 
+	// Record
+	Record                bool           `json:"record"`
+	RecordPath            string         `json:"recordPath"`
+	RecordFormat          string         `json:"recordFormat"`
+	RecordPartDuration    StringDuration `json:"recordPartDuration"`
+	RecordSegmentDuration StringDuration `json:"recordSegmentDuration"`
+	RecordDeleteAfter     StringDuration `json:"recordDeleteAfter"`
+
 	// Paths
 	Paths map[string]*PathConf `json:"paths"`
 }
 
 // Load loads a Conf.
-func Load(fpath string) (*Conf, bool, error) {
+func Load(fpath string, defaultConfPaths []string) (*Conf, string, error) {
 	conf := &Conf{}
 
-	found, err := loadFromFile(fpath, conf)
+	fpath, err := loadFromFile(fpath, defaultConfPaths, conf)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 
 	err = env.Load("RTSP", conf) // legacy prefix
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 
 	err = env.Load("MTX", conf)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 
 	err = conf.Check()
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 
-	return conf, found, nil
+	return conf, fpath, nil
 }
 
 // Clone clones the configuration.
@@ -294,6 +305,12 @@ func (conf *Conf) Check() error {
 		}
 	}
 
+	// Record
+
+	if conf.RecordFormat != "fmp4" {
+		return fmt.Errorf("unsupported record format '%s'", conf.RecordFormat)
+	}
+
 	// do not add automatically "all", since user may want to
 	// initialize all paths through API or hot reloading.
 	if conf.Paths == nil {
@@ -318,7 +335,9 @@ func (conf *Conf) Check() error {
 	return nil
 }
 
-// UnmarshalJSON implements json.Unmarshaler. It is used to set default values.
+// UnmarshalJSON implements json.Unmarshaler. It is used to:
+// - force DisallowUnknownFields
+// - set default values
 func (conf *Conf) UnmarshalJSON(b []byte) error {
 	// general
 	conf.LogLevel = LogLevel(logger.Info)
@@ -354,6 +373,8 @@ func (conf *Conf) UnmarshalJSON(b []byte) error {
 	conf.RTMP = true
 	conf.RTMPAddress = ":1935"
 	conf.RTMPSAddress = ":1936"
+	conf.RTMPServerKey = "server.key"
+	conf.RTMPServerCert = "server.crt"
 
 	// HLS
 	conf.HLS = true
@@ -374,10 +395,18 @@ func (conf *Conf) UnmarshalJSON(b []byte) error {
 	conf.WebRTCServerCert = "server.crt"
 	conf.WebRTCAllowOrigin = "*"
 	conf.WebRTCICEServers2 = []WebRTCICEServer{{URL: "stun:stun.l.google.com:19302"}}
+	conf.WebRTCICEHostNAT1To1IPs = []string{}
 
 	// SRT
 	conf.SRT = true
 	conf.SRTAddress = ":8890"
+
+	// Record
+	conf.RecordPath = "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f"
+	conf.RecordFormat = "fmp4"
+	conf.RecordPartDuration = 100 * StringDuration(time.Millisecond)
+	conf.RecordSegmentDuration = 3600 * StringDuration(time.Second)
+	conf.RecordDeleteAfter = 24 * 3600 * StringDuration(time.Second)
 
 	type alias Conf
 	d := json.NewDecoder(bytes.NewReader(b))

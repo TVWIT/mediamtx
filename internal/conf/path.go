@@ -38,6 +38,16 @@ func IsValidPathName(name string) error {
 	return nil
 }
 
+func srtCheckPassphrase(passphrase string) error {
+	switch {
+	case len(passphrase) < 10 || len(passphrase) > 79:
+		return fmt.Errorf("must be between 10 and 79 characters")
+
+	default:
+		return nil
+	}
+}
+
 // PathConf is a path configuration.
 type PathConf struct {
 	Regexp *regexp.Regexp `json:"-"`
@@ -49,6 +59,8 @@ type PathConf struct {
 	SourceOnDemandStartTimeout StringDuration `json:"sourceOnDemandStartTimeout"`
 	SourceOnDemandCloseAfter   StringDuration `json:"sourceOnDemandCloseAfter"`
 	MaxReaders                 int            `json:"maxReaders"`
+	SRTReadPassphrase          string         `json:"srtReadPassphrase"`
+	Record                     bool           `json:"record"`
 
 	// Authentication
 	PublishUser Credential `json:"publishUser"`
@@ -62,12 +74,13 @@ type PathConf struct {
 	OverridePublisher        bool   `json:"overridePublisher"`
 	DisablePublisherOverride bool   `json:"disablePublisherOverride"` // deprecated
 	Fallback                 string `json:"fallback"`
+	SRTPublishPassphrase     string `json:"srtPublishPassphrase"`
 
 	// RTSP
 	SourceProtocol      SourceProtocol `json:"sourceProtocol"`
 	SourceAnyPortEnable bool           `json:"sourceAnyPortEnable"`
-	RtspRangeType       RtspRangeType  `json:"rtspRangeType"`
-	RtspRangeStart      string         `json:"rtspRangeStart"`
+	RTSPRangeType       RTSPRangeType  `json:"rtspRangeType"`
+	RTSPRangeStart      string         `json:"rtspRangeStart"`
 
 	// Redirect
 	SourceRedirect string `json:"sourceRedirect"`
@@ -106,17 +119,20 @@ type PathConf struct {
 	RPICameraTextOverlayEnable bool    `json:"rpiCameraTextOverlayEnable"`
 	RPICameraTextOverlay       string  `json:"rpiCameraTextOverlay"`
 
-	// External commands
-	RunOnInit               string         `json:"runOnInit"`
-	RunOnInitRestart        bool           `json:"runOnInitRestart"`
-	RunOnDemand             string         `json:"runOnDemand"`
-	RunOnDemandRestart      bool           `json:"runOnDemandRestart"`
-	RunOnDemandStartTimeout StringDuration `json:"runOnDemandStartTimeout"`
-	RunOnDemandCloseAfter   StringDuration `json:"runOnDemandCloseAfter"`
-	RunOnReady              string         `json:"runOnReady"`
-	RunOnReadyRestart       bool           `json:"runOnReadyRestart"`
-	RunOnRead               string         `json:"runOnRead"`
-	RunOnReadRestart        bool           `json:"runOnReadRestart"`
+	// Hooks
+	RunOnInit                  string         `json:"runOnInit"`
+	RunOnInitRestart           bool           `json:"runOnInitRestart"`
+	RunOnDemand                string         `json:"runOnDemand"`
+	RunOnDemandRestart         bool           `json:"runOnDemandRestart"`
+	RunOnDemandStartTimeout    StringDuration `json:"runOnDemandStartTimeout"`
+	RunOnDemandCloseAfter      StringDuration `json:"runOnDemandCloseAfter"`
+	RunOnReady                 string         `json:"runOnReady"`
+	RunOnReadyRestart          bool           `json:"runOnReadyRestart"`
+	RunOnNotReady              string         `json:"runOnNotReady"`
+	RunOnRead                  string         `json:"runOnRead"`
+	RunOnReadRestart           bool           `json:"runOnReadRestart"`
+	RunOnUnread                string         `json:"runOnUnread"`
+	RunOnRecordSegmentComplete string         `json:"runOnRecordSegmentComplete"`
 }
 
 func (pconf *PathConf) check(conf *Conf, name string) error {
@@ -253,6 +269,48 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 			}
 		}
 
+		switch pconf.RPICameraExposure {
+		case "normal", "short", "long", "custom":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraExposure' value")
+		}
+
+		switch pconf.RPICameraAWB {
+		case "auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy", "custom":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraAWB' value")
+		}
+
+		switch pconf.RPICameraDenoise {
+		case "off", "cdn_off", "cdn_fast", "cdn_hq":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraDenoise' value")
+		}
+
+		switch pconf.RPICameraMetering {
+		case "centre", "spot", "matrix", "custom":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraMetering' value")
+		}
+
+		switch pconf.RPICameraAfMode {
+		case "auto", "manual", "continuous":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraAfMode' value")
+		}
+
+		switch pconf.RPICameraAfRange {
+		case "normal", "macro", "full":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraAfRange' value")
+		}
+
+		switch pconf.RPICameraAfSpeed {
+		case "normal", "fast":
+		default:
+			return fmt.Errorf("invalid 'rpiCameraAfSpeed' value")
+		}
+
 	default:
 		return fmt.Errorf("invalid source: '%s'", pconf.Source)
 	}
@@ -262,6 +320,12 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 			return fmt.Errorf("'sourceOnDemand' is useless when source is 'publisher'")
 		}
 	}
+	if pconf.SRTReadPassphrase != "" {
+		err := srtCheckPassphrase(pconf.SRTReadPassphrase)
+		if err != nil {
+			return fmt.Errorf("invalid 'readRTPassphrase': %v", err)
+		}
+	}
 
 	// Publisher
 
@@ -269,6 +333,10 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 		pconf.OverridePublisher = true
 	}
 	if pconf.Fallback != "" {
+		if pconf.Source != "publisher" {
+			return fmt.Errorf("'fallback' can only be used when source is 'publisher'")
+		}
+
 		if strings.HasPrefix(pconf.Fallback, "/") {
 			err := IsValidPathName(pconf.Fallback[1:])
 			if err != nil {
@@ -279,6 +347,16 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 			if err != nil {
 				return fmt.Errorf("'%s' is not a valid RTSP URL", pconf.Fallback)
 			}
+		}
+	}
+	if pconf.SRTPublishPassphrase != "" {
+		if pconf.Source != "publisher" {
+			return fmt.Errorf("'srtPublishPassphase' can only be used when source is 'publisher'")
+		}
+
+		err := srtCheckPassphrase(pconf.SRTPublishPassphrase)
+		if err != nil {
+			return fmt.Errorf("invalid 'srtPublishPassphrase': %v", err)
 		}
 	}
 
@@ -317,10 +395,11 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 		}
 	}
 
-	// External commands
+	// Hooks
 
 	if pconf.RunOnInit != "" && pconf.Regexp != nil {
-		return fmt.Errorf("a path with a regular expression does not support option 'runOnInit'; use another path")
+		return fmt.Errorf("a path with a regular expression (or path 'all')" +
+			" does not support option 'runOnInit'; use another path")
 	}
 	if pconf.RunOnDemand != "" && pconf.Source != "publisher" {
 		return fmt.Errorf("'runOnDemand' can be used only when source is 'publisher'")
@@ -346,6 +425,8 @@ func (pconf PathConf) Clone() *PathConf {
 	if err != nil {
 		panic(err)
 	}
+
+	dest.Regexp = pconf.Regexp
 
 	return &dest
 }
@@ -375,14 +456,15 @@ func (pconf PathConf) HasOnDemandPublisher() bool {
 	return pconf.RunOnDemand != ""
 }
 
-// UnmarshalJSON implements json.Unmarshaler. It is used to set default values.
+// UnmarshalJSON implements json.Unmarshaler. It is used to:
+// - force DisallowUnknownFields
+// - set default values
 func (pconf *PathConf) UnmarshalJSON(b []byte) error {
-	// Source
-	pconf.Source = "publisher"
-
 	// General
+	pconf.Source = "publisher"
 	pconf.SourceOnDemandStartTimeout = 10 * StringDuration(time.Second)
 	pconf.SourceOnDemandCloseAfter = 10 * StringDuration(time.Second)
+	pconf.Record = true
 
 	// Publisher
 	pconf.OverridePublisher = true
@@ -393,14 +475,21 @@ func (pconf *PathConf) UnmarshalJSON(b []byte) error {
 	pconf.RPICameraContrast = 1
 	pconf.RPICameraSaturation = 1
 	pconf.RPICameraSharpness = 1
+	pconf.RPICameraExposure = "normal"
+	pconf.RPICameraAWB = "auto"
+	pconf.RPICameraDenoise = "off"
+	pconf.RPICameraMetering = "centre"
 	pconf.RPICameraFPS = 30
 	pconf.RPICameraIDRPeriod = 60
 	pconf.RPICameraBitrate = 1000000
 	pconf.RPICameraProfile = "main"
 	pconf.RPICameraLevel = "4.1"
+	pconf.RPICameraAfMode = "auto"
+	pconf.RPICameraAfRange = "normal"
+	pconf.RPICameraAfSpeed = "normal"
 	pconf.RPICameraTextOverlay = "%Y-%m-%d %H:%M:%S - MediaMTX"
 
-	// External commands
+	// Hooks
 	pconf.RunOnDemandStartTimeout = 10 * StringDuration(time.Second)
 	pconf.RunOnDemandCloseAfter = 10 * StringDuration(time.Second)
 
