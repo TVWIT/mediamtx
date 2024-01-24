@@ -5,72 +5,38 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/logger"
 )
 
-func commonPath(v string) string {
-	common := ""
-	remaining := v
+var timeNow = time.Now
 
-	for {
-		i := strings.IndexAny(remaining, "\\/")
-		if i < 0 {
-			break
-		}
-
-		var part string
-		part, remaining = remaining[:i+1], remaining[i+1:]
-
-		if strings.Contains(part, "%") {
-			break
-		}
-
-		common += part
-	}
-
-	if len(common) > 0 {
-		common = common[:len(common)-1]
-	}
-
-	return common
+// CleanerEntry is a cleaner entry.
+type CleanerEntry struct {
+	Path        string
+	Format      conf.RecordFormat
+	DeleteAfter time.Duration
 }
 
-// Cleaner removes expired recordings from disk.
+// Cleaner removes expired recording segments from disk.
 type Cleaner struct {
-	ctx         context.Context
-	ctxCancel   func()
-	path        string
-	deleteAfter time.Duration
-	parent      logger.Writer
+	Entries []CleanerEntry
+	Parent  logger.Writer
+
+	ctx       context.Context
+	ctxCancel func()
 
 	done chan struct{}
 }
 
-// NewCleaner allocates a Cleaner.
-func NewCleaner(
-	recordPath string,
-	deleteAfter time.Duration,
-	parent logger.Writer,
-) *Cleaner {
-	recordPath += ".mp4"
-
-	ctx, ctxCancel := context.WithCancel(context.Background())
-
-	c := &Cleaner{
-		ctx:         ctx,
-		ctxCancel:   ctxCancel,
-		path:        recordPath,
-		deleteAfter: deleteAfter,
-		parent:      parent,
-		done:        make(chan struct{}),
-	}
+// Initialize initializes a Cleaner.
+func (c *Cleaner) Initialize() {
+	c.ctx, c.ctxCancel = context.WithCancel(context.Background())
+	c.done = make(chan struct{})
 
 	go c.run()
-
-	return c
 }
 
 // Close closes the Cleaner.
@@ -79,17 +45,19 @@ func (c *Cleaner) Close() {
 	<-c.done
 }
 
-// Log is the main logging function.
+// Log implements logger.Writer.
 func (c *Cleaner) Log(level logger.Level, format string, args ...interface{}) {
-	c.parent.Log(level, "[record cleaner]"+format, args...)
+	c.Parent.Log(level, "[record cleaner]"+format, args...)
 }
 
 func (c *Cleaner) run() {
 	defer close(c.done)
 
 	interval := 30 * 60 * time.Second
-	if interval > (c.deleteAfter / 2) {
-		interval = c.deleteAfter / 2
+	for _, e := range c.Entries {
+		if interval > (e.DeleteAfter / 2) {
+			interval = e.DeleteAfter / 2
+		}
 	}
 
 	c.doRun() //nolint:errcheck
@@ -97,7 +65,7 @@ func (c *Cleaner) run() {
 	for {
 		select {
 		case <-time.After(interval):
-			c.doRun() //nolint:errcheck
+			c.doRun()
 
 		case <-c.ctx.Done():
 			return
@@ -105,21 +73,34 @@ func (c *Cleaner) run() {
 	}
 }
 
-func (c *Cleaner) doRun() error {
-	commonPath := commonPath(c.path)
+func (c *Cleaner) doRun() {
+	for _, e := range c.Entries {
+		c.doRunEntry(&e) //nolint:errcheck
+	}
+}
+
+func (c *Cleaner) doRunEntry(e *CleanerEntry) error {
+	entryPath := PathAddExtension(e.Path, e.Format)
+
+	// we have to convert to absolute paths
+	// otherwise, entryPath and fpath inside Walk() won't have common elements
+	entryPath, _ = filepath.Abs(entryPath)
+
+	commonPath := CommonPath(entryPath)
 	now := timeNow()
 
-	filepath.Walk(commonPath, func(path string, info fs.FileInfo, err error) error { //nolint:errcheck
+	filepath.Walk(commonPath, func(fpath string, info fs.FileInfo, err error) error { //nolint:errcheck
 		if err != nil {
 			return err
 		}
 
 		if !info.IsDir() {
-			params := decodeRecordPath(c.path, path)
-			if params != nil {
-				if now.Sub(params.time) > c.deleteAfter {
-					c.Log(logger.Debug, "removing %s", path)
-					os.Remove(path)
+			var pa Path
+			ok := pa.Decode(entryPath, fpath)
+			if ok {
+				if now.Sub(time.Time(pa)) > e.DeleteAfter {
+					c.Log(logger.Debug, "removing %s", fpath)
+					os.Remove(fpath)
 				}
 			}
 		}
@@ -127,13 +108,13 @@ func (c *Cleaner) doRun() error {
 		return nil
 	})
 
-	filepath.Walk(commonPath, func(path string, info fs.FileInfo, err error) error { //nolint:errcheck
+	filepath.Walk(commonPath, func(fpath string, info fs.FileInfo, err error) error { //nolint:errcheck
 		if err != nil {
 			return err
 		}
 
 		if info.IsDir() {
-			os.Remove(path)
+			os.Remove(fpath)
 		}
 
 		return nil

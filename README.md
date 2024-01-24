@@ -22,11 +22,11 @@ Live streams can be published to the server with:
 |--------|--------|------------|------------|
 |[SRT clients](#srt-clients)||H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3|
 |[SRT cameras and servers](#srt-cameras-and-servers)||H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3|
-|[WebRTC clients](#webrtc-clients)|Browser-based, WHIP|AV1, VP9, VP8, H264|Opus, G722, G711|
-|[WebRTC servers](#webrtc-servers)|WHEP|AV1, VP9, VP8, H264|Opus, G722, G711|
-|[RTSP clients](#rtsp-clients)|UDP, TCP, RTSPS|AV1, VP9, VP8, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG and any RTP-compatible codec|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G726, G722, G711, LPCM and any RTP-compatible codec|
-|[RTSP cameras and servers](#rtsp-cameras-and-servers)|UDP, UDP-Multicast, TCP, RTSPS|AV1, VP9, VP8, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG and any RTP-compatible codec|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G726, G722, G711, LPCM and any RTP-compatible codec|
-|[RTMP clients](#rtmp-clients)|RTMP, RTMPS, Enhanced RTMP|AV1, VP9, H265, H264|MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3)|
+|[WebRTC clients](#webrtc-clients)|Browser-based, WHIP|AV1, VP9, VP8, H264|Opus, G722, G711 (PCMA, PCMU)|
+|[WebRTC servers](#webrtc-servers)|WHEP|AV1, VP9, VP8, H264|Opus, G722, G711 (PCMA, PCMU)|
+|[RTSP clients](#rtsp-clients)|UDP, TCP, RTSPS|AV1, VP9, VP8, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG and any RTP-compatible codec|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G726, G722, G711 (PCMA, PCMU), LPCM and any RTP-compatible codec|
+|[RTSP cameras and servers](#rtsp-cameras-and-servers)|UDP, UDP-Multicast, TCP, RTSPS|AV1, VP9, VP8, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG and any RTP-compatible codec|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G726, G722, G711 (PCMA, PCMU), LPCM and any RTP-compatible codec|
+|[RTMP clients](#rtmp-clients)|RTMP, RTMPS, Enhanced RTMP|AV1, VP9, H265, H264|MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), G711 (PCMA, PCMU), LPCM|
 |[RTMP cameras and servers](#rtmp-cameras-and-servers)|RTMP, RTMPS, Enhanced RTMP|H264|MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3)|
 |[HLS cameras and servers](#hls-cameras-and-servers)|Low-Latency HLS, MP4-based HLS, legacy HLS|AV1, VP9, H265, H264|Opus, MPEG-4 Audio (AAC)|
 |[UDP/MPEG-TS](#udpmpeg-ts)|Unicast, broadcast, multicast|H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3|
@@ -37,10 +37,17 @@ And can be read from the server with:
 |protocol|variants|video codecs|audio codecs|
 |--------|--------|------------|------------|
 |[SRT](#srt)||H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3|
-|[WebRTC](#webrtc)|Browser-based, WHEP|AV1, VP9, VP8, H264|Opus, G722, G711|
-|[RTSP](#rtsp)|UDP, UDP-Multicast, TCP, RTSPS|AV1, VP9, VP8, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG and any RTP-compatible codec|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G726, G722, G711, LPCM and any RTP-compatible codec|
+|[WebRTC](#webrtc)|Browser-based, WHEP|AV1, VP9, VP8, H264|Opus, G722, G711 (PCMA, PCMU)|
+|[RTSP](#rtsp)|UDP, UDP-Multicast, TCP, RTSPS|AV1, VP9, VP8, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG and any RTP-compatible codec|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G726, G722, G711 (PCMA, PCMU), LPCM and any RTP-compatible codec|
 |[RTMP](#rtmp)|RTMP, RTMPS, Enhanced RTMP|H264|MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3)|
 |[HLS](#hls)|Low-Latency HLS, MP4-based HLS, legacy HLS|AV1, VP9, H265, H264|Opus, MPEG-4 Audio (AAC)|
+
+And can be recorded with:
+
+|format|video codecs|audio codecs|
+|------|------------|------------|
+|[fMP4](#record-streams-to-disk)|AV1, VP9, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3, G711 (PCMA, PCMU), LPCM|
+|[MPEG-TS](#record-streams-to-disk)|H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video|Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3|
 
 **Features**
 
@@ -49,6 +56,7 @@ And can be read from the server with:
 * Streams are automatically converted from a protocol to another
 * Serve multiple streams at once in separate paths
 * Record streams to disk
+* Playback recordings
 * Authenticate users; use internal or external authentication
 * Redirect readers to other RTSP servers (load balancing)
 * Query and control the server through the API
@@ -67,7 +75,7 @@ _rtsp-simple-server_ has been rebranded as _MediaMTX_. The reason is pretty obvi
   * [Standalone binary](#standalone-binary)
   * [Docker image](#docker-image)
   * [Arch Linux package](#arch-linux-package)
-  * [OpenWRT package](#openwrt-package)
+  * [OpenWrt binary](#openwrt-binary)
 * [Basic usage](#basic-usage)
 * [Publish to the server](#publish-to-the-server)
   * [By software](#by-software)
@@ -108,32 +116,44 @@ _rtsp-simple-server_ has been rebranded as _MediaMTX_. The reason is pretty obvi
   * [Encrypt the configuration](#encrypt-the-configuration)
   * [Remuxing, re-encoding, compression](#remuxing-re-encoding-compression)
   * [Record streams to disk](#record-streams-to-disk)
-  * [Forward streams to another server](#forward-streams-to-another-server)
+  * [Playback recordings](#playback-recordings)
+  * [Forward streams to other servers](#forward-streams-to-other-servers)
+  * [Proxy requests to other servers](#proxy-requests-to-other-servers)
   * [On-demand publishing](#on-demand-publishing)
   * [Start on boot](#start-on-boot)
+    * [Linux](#linux)
+    * [OpenWrt](#openwrt)
+    * [Windows](#windows)
   * [Hooks](#hooks)
   * [API](#api)
   * [Metrics](#metrics)
   * [pprof](#pprof)
+  * [SRT-specific features](#srt-specific-features)
+    * [Standard stream ID syntax](#standard-stream-id-syntax)
+  * [WebRTC-specific features](#webrtc-specific-features)
+    * [Connectivity issues](#connectivity-issues)
   * [RTSP-specific features](#rtsp-specific-features)
     * [Transport protocols](#transport-protocols)
     * [Encryption](#encryption)
     * [Corrupted frames](#corrupted-frames)
   * [RTMP-specific features](#rtmp-specific-features)
     * [Encryption](#encryption-1)
-  * [WebRTC-specific features](#webrtc-specific-features)
-    * [Connectivity issues](#connectivity-issues)
 * [Compile from source](#compile-from-source)
+  * [Standard](#standard)
+  * [Raspberry Pi](#raspberry-pi)
+  * [OpenWrt](#openwrt-1)
+  * [Cross compile](#cross-compile)
+  * [Compile for all supported platforms](#compile-for-all-supported-platforms)
 * [Specifications](#specifications)
 * [Related projects](#related-projects)
 
 ## Installation
 
-There are several installation methods available: standalone binary, Docker image, Arch Linux package and OpenWRT package.
+There are several installation methods available: standalone binary, Docker image, Arch Linux package and OpenWrt binary.
 
 ### Standalone binary
 
-1. Download and extract a standalone binary from the [release page](https://github.com/bluenviron/mediamtx/releases).
+1. Download and extract a standalone binary from the [release page](https://github.com/bluenviron/mediamtx/releases) that corresponds to your operating system and architecture.
 
 2. Start the server:
 
@@ -163,13 +183,17 @@ The `--network=host` flag is mandatory since Docker can change the source port o
 ```
 docker run --rm -it \
 -e MTX_PROTOCOLS=tcp \
+-e MTX_WEBRTCADDITIONALHOSTS=192.168.x.x \
 -p 8554:8554 \
 -p 1935:1935 \
 -p 8888:8888 \
 -p 8889:8889 \
 -p 8890:8890/udp \
+-p 8189:8189/udp \
 bluenviron/mediamtx
 ```
+
+set `MTX_WEBRTCADDITIONALHOSTS` to your local IP address.
 
 ### Arch Linux package
 
@@ -181,39 +205,11 @@ cd mediamtx
 makepkg -si
 ```
 
-### OpenWRT package
+### OpenWrt binary
 
-1. In a x86 Linux system, download the OpenWRT SDK corresponding to the wanted OpenWRT version and target from the [OpenWRT website](https://downloads.openwrt.org/releases/) and extract it.
+If the architecture of the OpenWrt device is amd64, armv6, armv7 or arm64, use the [standalone binary method](#standalone-binary) and download a Linux binary that corresponds to your architecture.
 
-2. Open a terminal in the SDK folder and setup the SDK:
-
-   ```sh
-   ./scripts/feeds update -a
-   ./scripts/feeds install -a
-   make defconfig
-   ```
-
-3. Download the server Makefile and set the server version inside the file:
-
-   ```sh
-   mkdir package/mediamtx
-   wget -O package/mediamtx/Makefile https://raw.githubusercontent.com/bluenviron/mediamtx/main/openwrt.mk
-   sed -i "s/v0.0.0/$(git ls-remote --tags --sort=v:refname https://github.com/bluenviron/mediamtx | tail -n1 | sed 's/.*\///; s/\^{}//')/" package/mediamtx/Makefile
-   ```
-
-4. Compile the server:
-
-   ```sh
-   make package/mediamtx/compile -j$(nproc)
-   ```
-
-5. Transfer the .ipk file from `bin/packages/*/base` to the OpenWRT system
-
-6. Install it with:
-
-   ```sh
-   opkg install [ipk-file-name].ipk
-   ```
+Otherwise, [compile the server from source](#openwrt-1).
 
 ## Basic usage
 
@@ -424,7 +420,7 @@ This web page can be embedded into another web page by using an iframe:
 <iframe src="http://mediamtx-ip:8889/mystream/publish" scrolling="no"></iframe>
 ```
 
-For more advanced setups, you can create and serve a custom web page by starting from the [source code of the publish page](internal/core/webrtc_publish_index.html).
+For more advanced setups, you can create and serve a custom web page by starting from the [source code of the publish page](internal/servers/webrtc/publish_index.html).
 
 ### By device
 
@@ -495,6 +491,8 @@ docker run --rm -it \
 bluenviron/mediamtx:latest-rpi
 ```
 
+Be aware that the Docker image is not compatible with cameras that requires a custom `libcamera` (like some ArduCam products), since it comes with a standard `libcamera` included.
+
 Camera settings can be changed by using the `rpiCamera*` parameters:
 
 ```yml
@@ -564,6 +562,8 @@ If credentials are enabled, append username and password to `streamid`;
 ```
 srt://localhost:8890?streamid=publish:mystream:user:pass&pkt_size=1316
 ```
+
+If you need to use the standard stream ID syntax instead of the custom one in use by this server, see [Standard stream ID syntax](#standard-stream-id-syntax).
 
 If you want to publish a stream by using a client in listening mode (i.e. with `mode=listener` appended to the URL), read the next section.
 
@@ -636,7 +636,7 @@ paths:
 
 The resulting stream will be available in path `/proxied`.
 
-The server supports any number of source streams (count is just limited by hardware capability) it's enough to add additional entries to the paths section:
+The server supports any number of source streams (count is just limited by available hardware resources) it's enough to add additional entries to the paths section:
 
 ```yml
 paths:
@@ -781,8 +781,6 @@ In order to use the UDP-multicast transport protocol, append `?vlcmulticast` to 
 vlc --network-caching=50 rtsp://localhost:8554/mystream?vlcmulticast
 ```
 
-You can change the transport protocol by using the `--rtsp_` flag:
-
 ##### Ubuntu bug
 
 The VLC shipped with Ubuntu 21.10 doesn't support playing RTSP due to a license issue (see [here](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=982299) and [here](https://stackoverflow.com/questions/69766748/cvlc-cannot-play-rtsp-omxplayer-instead-can)). To fix the issue, remove the default VLC instance and install the snap version:
@@ -812,7 +810,7 @@ This web page can be embedded into another web page by using an iframe:
 <iframe src="http://mediamtx-ip:8889/mystream" scrolling="no"></iframe>
 ```
 
-For more advanced setups, you can create and serve a custom web page by starting from the [source code of the read page](internal/core/webrtc_read_index.html).
+For more advanced setups, you can create and serve a custom web page by starting from the [source code of the read page](internal/servers/webrtc/read_index.html).
 
 Web browsers can also read a stream with the [HLS protocol](#hls). Latency is higher but there are less problems related to connectivity between server and clients, furthermore the server load can be balanced by using a common HTTP CDN (like CloudFront or Cloudflare), and this allows to handle readers in the order of millions. Visit the web page:
 
@@ -841,8 +839,10 @@ Replace `mystream` with the path name.
 If credentials are enabled, append username and password to `streamid`;
 
 ```
-srt://localhost:8890?streamid=publish:mystream:user:pass
+srt://localhost:8890?streamid=read:mystream:user:pass
 ```
+
+If you need to use the standard stream ID syntax instead of the custom one in use by this server, see [Standard stream ID syntax](#standard-stream-id-syntax).
 
 Known clients that can read with SRT are [FFmpeg](#ffmpeg-1), [GStreamer](#gstreamer-1) and [VLC](#vlc).
 
@@ -876,7 +876,7 @@ Known clients that can read with RTSP are [FFmpeg](#ffmpeg-1), [GStreamer](#gstr
 
 ##### Latency
 
-The RTSP protocol doesn't introduce any latency by itself. Latency is usually introduced by clients, that put frames in a buffer to compensate network fluctuations. In order to decrease latency, the best way consists in tuning the client. For instance, latency can be decreased with VLC by decreasing the Network caching parameter, that is available in the Open network stream dialog or alternatively ca be set with the command line:
+The RTSP protocol doesn't introduce any latency by itself. Latency is usually introduced by clients, that put frames in a buffer to compensate network fluctuations. In order to decrease latency, the best way consists in tuning the client. For instance, in VLC, latency can be decreased by decreasing the Network caching parameter, that is available in the "Open network stream" dialog or alternatively can be set with the command line:
 
 ```
 vlc --network-caching=50 rtsp://...
@@ -884,7 +884,7 @@ vlc --network-caching=50 rtsp://...
 
 #### RTMP
 
-RTMP is a protocol that allows to read and publish streams, but is less versatile and less efficient than RTSP and WebRTC ((doesn't support UDP, doesn't support most RTSP codecs, doesn't support feedback mechanism)). Streams can be read from the server by using the URL:
+RTMP is a protocol that allows to read and publish streams, but is less versatile and less efficient than RTSP and WebRTC (doesn't support UDP, doesn't support most RTSP codecs, doesn't support feedback mechanism). Streams can be read from the server by using the URL:
 
 ```
 rtmp://localhost/mystream
@@ -1003,7 +1003,7 @@ There are 3 ways to change the configuration:
    MTX_RTSPADDRESS="127.0.0.1:8554" ./mediamtx
    ```
 
-   Parameters that have array as value can be overriden by setting a comma-separated list. For example:
+   Parameters that have array as value can be overridden by setting a comma-separated list. For example:
 
    ```
    MTX_PROTOCOLS="tcp,udp"
@@ -1025,13 +1025,12 @@ There are 3 ways to change the configuration:
 
 ### Authentication
 
-Edit `mediamtx.yml` and replace everything inside section `paths` with the following content:
+Edit `mediamtx.yml` and set `publishUser` and `publishPass`:
 
 ```yml
-paths:
-  all:
-    publishUser: myuser
-    publishPass: mypass
+pathDefaults:
+  publishUser: myuser
+  publishPass: mypass
 ```
 
 Only publishers that provide both username and password will be able to proceed:
@@ -1043,28 +1042,39 @@ ffmpeg -re -stream_loop -1 -i file.ts -c copy -f rtsp rtsp://myuser:mypass@local
 It's possible to setup authentication for readers too:
 
 ```yml
-paths:
-  all:
-    publishUser: myuser
-    publishPass: mypass
-
-    readUser: user
-    readPass: userpass
+pathDefaults:
+  readUser: myuser
+  readPass: mypass
 ```
 
-If storing plain credentials in the configuration file is a security problem, username and passwords can be stored as sha256-hashed strings; a string must be hashed with sha256 and encoded with base64:
+If storing plain credentials in the configuration file is a security problem, username and passwords can be stored as hashed strings. The Argon2 and SHA256 hashing algorithms are supported.
+
+To use Argon2, the string must be hashed using Argon2id (recommended) or Argon2i:
 
 ```
-echo -n "userpass" | openssl dgst -binary -sha256 | openssl base64
+echo -n "mypass" | argon2 saltItWithSalt -id -l 32 -e
+```
+
+Then stored with the `argon2:` prefix:
+
+```yml
+pathDefaults:
+  readUser: argon2:$argon2id$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$OGGO0eCMN0ievb4YGSzvS/H+Vajx1pcbUmtLp2tRqRU
+  readPass: argon2:$argon2i$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$oct3kOiFywTdDdt19kT07hdvmsPTvt9zxAUho2DLqZw
+```
+
+To use SHA256, the string must be hashed with SHA256 and encoded with base64:
+
+```
+echo -n "mypass" | openssl dgst -binary -sha256 | openssl base64
 ```
 
 Then stored with the `sha256:` prefix:
 
 ```yml
-paths:
-  all:
-    readUser: sha256:j1tsRqDEw9xvq/D7/9tMx6Jh/jMhk3UfjwIB2f1zgMo=
-    readPass: sha256:BdSWkrdV+ZxFBLUQQY7+7uv9RmiSVA8nrPmjGjJtZQQ=
+pathDefaults:
+  readUser: sha256:j1tsRqDEw9xvq/D7/9tMx6Jh/jMhk3UfjwIB2f1zgMo=
+  readPass: sha256:BdSWkrdV+ZxFBLUQQY7+7uv9RmiSVA8nrPmjGjJtZQQ=
 ```
 
 **WARNING**: enable encryption or use a VPN to ensure that no one is intercepting the credentials in transit.
@@ -1129,7 +1139,7 @@ To change the format, codec or compression of a stream, use _FFmpeg_ or _GStream
 
 ```yml
 paths:
-  all:
+  compressed:
   original:
     runOnReady: >
       ffmpeg -i rtsp://localhost:$RTSP_PORT/$MTX_PATH
@@ -1143,20 +1153,18 @@ paths:
 To save available streams to disk, set the `record` and the `recordPath` parameter in the configuration file:
 
 ```yml
-# Record streams to disk.
-record: yes
-# Path of recording segments.
-# Extension is added automatically.
-# Available variables are %path (path name), %Y %m %d %H %M %S %f (time in strftime format)
-recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+pathDefaults:
+  # Record streams to disk.
+  record: yes
+  # Path of recording segments.
+  # Extension is added automatically.
+  # Available variables are %path (path name), %Y %m %d %H %M %S %f %s (time in strftime format)
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
 ```
 
 All available recording parameters are listed in the [sample configuration file](/mediamtx.yml).
 
-Currently the server supports recording tracks encoded with the following codecs:
-
-* Video: AV1, VP9, H265, H264, MPEG-4 Video (H263, Xvid), MPEG-1/2 Video, M-JPEG
-* Audio: Opus, MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3), AC-3
+Be aware that not all codecs can be saved with all formats, as described in the compatibility matrix at the beginning of the README.
 
 To upload recordings to a remote location, you can use _MediaMTX_ together with [rclone](https://github.com/rclone/rclone), a command line tool that provides file synchronization capabilities with a huge variety of services (including S3, FTP, SMB, Google Drive):
 
@@ -1171,34 +1179,83 @@ To upload recordings to a remote location, you can use _MediaMTX_ together with 
 3. Place `rclone` into the `runOnInit` and `runOnRecordSegmentComplete` hooks:
 
    ```yml
-   record: yes
+   pathDefaults:
+     # this is needed to sync segments after a crash.
+     # replace myconfig with the name of the rclone config.
+     runOnInit: rclone sync -v ./recordings myconfig:/my-path/recordings
 
-   paths:
-     mypath:
-       # this is needed to sync segments after a crash.
-       # replace myconfig with the name of the rclone config.
-       runOnInit: rclone sync -v ./recordings myconfig:/my-path/recordings
-
-       # this is called when a segment has been finalized.
-       # replace myconfig with the name of the rclone config.
-       runOnRecordSegmentComplete: rclone sync -v --min-age=1ms ./recordings myconfig:/my-path/recordings
+     # this is called when a segment has been finalized.
+     # replace myconfig with the name of the rclone config.
+     runOnRecordSegmentComplete: rclone sync -v --min-age=1ms ./recordings myconfig:/my-path/recordings
    ```
 
    If you want to delete local segments after they are uploaded, replace `rclone sync` with `rclone move`.
 
-### Forward streams to another server
+### Playback recordings
+
+Recordings can be served to users through a dedicated HTTP server, that can be enabled inside the configuration:
+
+```yml
+playback: yes
+playbackAddress: :9996
+```
+
+The server can be queried for recordings by using the URL:
+
+```
+http://localhost:9996/get?path=[mypath]&start=[start_date]&duration=[duration]&format=[format]
+```
+
+Where:
+
+* [mypath] is the path name
+* [start_date] is the start date in RFC3339 format
+* [duration] is the maximum duration of the recording in Golang format (example: 20s, 20h)
+* [format] must be fmp4
+
+All parameters must be [url-encoded](https://www.urlencoder.org/).
+
+For instance:
+
+```
+http://localhost:9996/get?path=stream2&start=2024-01-14T16%3A33%3A17%2B00%3A00&duration=200s&format=fmp4
+```
+
+The resulting stream is natively compatible with any browser, therefore its URL can be directly inserted into a \<video> tag:
+
+```html
+<video controls>
+  <source src="http://localhost:9996/get?path=stream2&start=2024-01-14T16%3A33%3A17%2B00%3A00&duration=200s&format=fmp4" type="video/mp4" />
+</video>
+```
+
+### Forward streams to other servers
 
 To forward incoming streams to another server, use _FFmpeg_ inside the `runOnReady` parameter:
 
 ```yml
-paths:
-  all:
-    runOnReady: >
-      ffmpeg -i rtsp://localhost:$RTSP_PORT/$MTX_PATH
-      -c copy
-      -f rtsp rtsp://another-server/another-path
-    runOnReadyRestart: yes
+pathDefaults:
+  runOnReady: >
+    ffmpeg -i rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    -c copy
+    -f rtsp rtsp://other-server:8554/another-path
+  runOnReadyRestart: yes
 ```
+
+### Proxy requests to other servers
+
+The server allows to proxy incoming requests to other servers or cameras. This is useful to expose servers or cameras behind a NAT. Edit `mediamtx.yml` and replace everything inside section `paths` with the following content:
+
+```yml
+paths:
+  "~^proxy_(.+)$":
+    # If path name is a regular expression, $G1, G2, etc will be replaced
+    # with regular expression groups.
+    source: rtsp://other-server:8554/$G1
+    sourceOnDemand: yes
+```
+
+All requests addressed to `rtsp://server:8854/proxy_a` will be forwarded to `rtsp://other-server:8854/a` and so on.
 
 ### On-demand publishing
 
@@ -1217,16 +1274,16 @@ The command inserted into `runOnDemand` will start only when a client requests t
 
 #### Linux
 
-Systemd is the service manager used by Ubuntu, Debian and many other Linux distributions, and allows to launch _MediaMTX_ on boot.
+On most Linux distributions (including Ubuntu and Debian, but not OpenWrt), _systemd_ is in charge of managing services and starting them on boot.
 
-Download a release bundle from the [release page](https://github.com/bluenviron/mediamtx/releases), unzip it, and move the executable and configuration in the system:
+Move the server executable and configuration in global folders:
 
 ```sh
 sudo mv mediamtx /usr/local/bin/
 sudo mv mediamtx.yml /usr/local/etc/
 ```
 
-Create the service:
+Create a _systemd_ service:
 
 ```sh
 sudo tee /etc/systemd/system/mediamtx.service >/dev/null << EOF
@@ -1245,6 +1302,47 @@ Enable and start the service:
 sudo systemctl daemon-reload
 sudo systemctl enable mediamtx
 sudo systemctl start mediamtx
+```
+
+#### OpenWrt
+
+Move the server executable and configuration in global folders:
+
+```sh
+mv mediamtx /usr/bin/
+mkdir -p /usr/etc && mv mediamtx.yml /usr/etc/
+```
+
+Create a procd service:
+
+```sh
+tee /etc/init.d/mediamtx >/dev/null << EOF
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=95
+STOP=01
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/mediamtx
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+EOF
+```
+
+Enable and start the service:
+
+```sh
+chmod +x /etc/init.d/mediamtx
+/etc/init.d/mediamtx enable
+/etc/init.d/mediamtx start
+```
+
+Read the server logs:
+
+```sh
+logread
 ```
 
 #### Windows
@@ -1277,6 +1375,7 @@ The server allows to specify commands that are executed when a certain event hap
 `runOnConnect` allows to run a command when a client connects to the server:
 
 ```yml
+# Command to run when a client connects to the server.
 # This is terminated with SIGINT when a client disconnects from the server.
 # The following environment variables are available:
 # * RTSP_PORT: RTSP server port
@@ -1290,6 +1389,7 @@ runOnConnectRestart: no
 `runOnDisconnect` allows to run a command when a client disconnects from the server:
 
 ```yml
+# Command to run when a client disconnects from the server.
 # Environment variables are the same of runOnConnect.
 runOnDisconnect: curl http://my-custom-server/webhook?conn_type=$MTX_CONN_TYPE&conn_id=$MTX_CONN_ID
 ```
@@ -1299,7 +1399,8 @@ runOnDisconnect: curl http://my-custom-server/webhook?conn_type=$MTX_CONN_TYPE&c
 ```yml
 paths:
   mypath:
-    # This is terminated with SIGINT when the program closes.
+    # Command to run when this path is initialized.
+    # This can be used to publish a stream when the server is launched.
     # The following environment variables are available:
     # * MTX_PATH: path name
     # * RTSP_PORT: RTSP server port
@@ -1313,87 +1414,113 @@ paths:
 `runOnDemand` allows to run a command when a path is requested by a reader. This can be used to publish a stream on demand:
 
 ```yml
-paths:
-  mypath:
-    # This is terminated with SIGINT when the program closes.
-    # The following environment variables are available:
-    # * MTX_PATH: path name
-    # * RTSP_PORT: RTSP server port
-    # * G1, G2, ...: regular expression groups, if path name is
-    #   a regular expression.
-    runOnDemand: ffmpeg -i my_file.mp4 -c copy -f rtsp rtsp://localhost:8554/mypath
-    # Restart the command if it exits.
-    runOnDemandRestart: no
+pathDefaults:
+  # Command to run when this path is requested by a reader
+  # and no one is publishing to this path yet.
+  # This is terminated with SIGINT when there are no readers anymore.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by first reader)
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnDemand: ffmpeg -i my_file.mp4 -c copy -f rtsp rtsp://localhost:8554/mypath
+  # Restart the command if it exits.
+  runOnDemandRestart: no
+```
+
+`runOnUnDemand` allows to run a command when there are no readers anymore:
+
+```yml
+pathDefaults:
+  # Command to run when there are no readers anymore.
+  # Environment variables are the same of runOnDemand.
+  runOnUnDemand:
 ```
 
 `runOnReady` allows to run a command when a stream is ready to be read:
 
 ```yml
-paths:
-  mypath:
-    # This is terminated with SIGINT when the stream is not ready anymore.
-    # The following environment variables are available:
-    # * MTX_PATH: path name
-    # * MTX_SOURCE_TYPE: source type
-    # * MTX_SOURCE_ID: source ID
-    # * RTSP_PORT: RTSP server port
-    # * G1, G2, ...: regular expression groups, if path name is
-    #   a regular expression.
-    runOnReady: curl http://my-custom-server/webhook?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID
-    # Restart the command if it exits.
-    runOnReadyRestart: no
+pathDefaults:
+  # Command to run when the stream is ready to be read, whenever it is
+  # published by a client or pulled from a server / camera.
+  # This is terminated with SIGINT when the stream is not ready anymore.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by publisher)
+  # * MTX_SOURCE_TYPE: source type
+  # * MTX_SOURCE_ID: source ID
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnReady: curl http://my-custom-server/webhook?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID
+  # Restart the command if it exits.
+  runOnReadyRestart: no
 ```
 
 `runOnNotReady` allows to run a command when a stream is not available anymore:
 
 ```yml
-paths:
-  mypath:
-    # Environment variables are the same of runOnReady.
-    runOnNotReady: curl http://my-custom-server/webhook?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID
+pathDefaults:
+  # Command to run when the stream is not available anymore.
+  # Environment variables are the same of runOnReady.
+  runOnNotReady: curl http://my-custom-server/webhook?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID
 ```
 
 `runOnRead` allows to run a command when a client starts reading:
 
 ```yml
-paths:
-  mypath:
-    # This is terminated with SIGINT when a client stops reading.
-    # The following environment variables are available:
-    # * MTX_PATH: path name
-    # * MTX_READER_TYPE: reader type
-    # * MTX_READER_ID: reader ID
-    # * RTSP_PORT: RTSP server port
-    # * G1, G2, ...: regular expression groups, if path name is
-    #   a regular expression.
-    runOnRead: curl http://my-custom-server/webhook?path=$MTX_PATH&reader_type=$MTX_READER_TYPE&reader_id=$MTX_READER_ID
-    # Restart the command if it exits.
-    runOnReadRestart: no
+pathDefaults:
+  # Command to run when a client starts reading.
+  # This is terminated with SIGINT when a client stops reading.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by reader)
+  # * MTX_READER_TYPE: reader type
+  # * MTX_READER_ID: reader ID
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnRead: curl http://my-custom-server/webhook?path=$MTX_PATH&reader_type=$MTX_READER_TYPE&reader_id=$MTX_READER_ID
+  # Restart the command if it exits.
+  runOnReadRestart: no
 ```
 
 `runOnUnread` allows to run a command when a client stops reading:
 
 ```yml
-paths:
-  mypath:
-    # Command to run when a client stops reading.
-    # Environment variables are the same of runOnRead.
-    runOnUnread: curl http://my-custom-server/webhook?path=$MTX_PATH&reader_type=$MTX_READER_TYPE&reader_id=$MTX_READER_ID
+pathDefaults:
+  # Command to run when a client stops reading.
+  # Environment variables are the same of runOnRead.
+  runOnUnread: curl http://my-custom-server/webhook?path=$MTX_PATH&reader_type=$MTX_READER_TYPE&reader_id=$MTX_READER_ID
 ```
 
-`runOnRecordSegmentComplete` allows to run a command when a record segment is complete:
+`runOnRecordSegmentCreate` allows to run a command when a recording segment is created:
 
 ```yml
-paths:
-  mypath:
-    # Command to run when a record segment is complete.
-    # The following environment variables are available:
-    # * MTX_PATH: path name
-    # * RTSP_PORT: RTSP server port
-    # * G1, G2, ...: regular expression groups, if path name is
-    #   a regular expression.
-    # * MTX_SEGMENT_PATH: segment file path
-    runOnRecordSegmentComplete: curl http://my-custom-server/webhook?path=$MTX_PATH&segment_path=$MTX_SEGMENT_PATH
+pathDefaults:
+  # Command to run when a recording segment is created.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  # * MTX_SEGMENT_PATH: segment file path
+  runOnRecordSegmentCreate: curl http://my-custom-server/webhook?path=$MTX_PATH&segment_path=$MTX_SEGMENT_PATH
+```
+
+`runOnRecordSegmentComplete` allows to run a command when a recording segment is complete:
+
+```yml
+pathDefaults:
+  # Command to run when a recording segment is complete.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  # * MTX_SEGMENT_PATH: segment file path
+  runOnRecordSegmentComplete: curl http://my-custom-server/webhook?path=$MTX_PATH&segment_path=$MTX_SEGMENT_PATH
 ```
 
 ### API
@@ -1426,6 +1553,7 @@ Obtaining:
 # metrics of every path
 paths{name="[path_name]",state="[state]"} 1
 paths_bytes_received{name="[path_name]",state="[state]"} 1234
+paths_bytes_sent{name="[path_name]",state="[state]"} 1234
 
 # metrics of every HLS muxer
 hls_muxers{name="[name]"} 1
@@ -1456,8 +1584,18 @@ rtmp_conns{id="[id]",state="[state]"} 1
 rtmp_conns_bytes_received{id="[id]",state="[state]"} 1234
 rtmp_conns_bytes_sent{id="[id]",state="[state]"} 187
 
+# metrics of every RTMPS connection
+rtmps_conns{id="[id]",state="[state]"} 1
+rtmps_conns_bytes_received{id="[id]",state="[state]"} 1234
+rtmps_conns_bytes_sent{id="[id]",state="[state]"} 187
+
+# metrics of every SRT connection
+srt_conns{id="[id]",state="[state]"} 1
+srt_conns_bytes_received{id="[id]",state="[state]"} 1234
+srt_conns_bytes_sent{id="[id]",state="[state]"} 187
+
 # metrics of every WebRTC session
-webrtc_sessions{id="[id]"} 1
+webrtc_sessions{id="[id]",state="[state]"} 1
 webrtc_sessions_bytes_received{id="[id]",state="[state]"} 1234
 webrtc_sessions_bytes_sent{id="[id]",state="[state]"} 187
 ```
@@ -1471,6 +1609,84 @@ go tool pprof -text http://localhost:9999/debug/pprof/goroutine
 go tool pprof -text http://localhost:9999/debug/pprof/heap
 go tool pprof -text http://localhost:9999/debug/pprof/profile?seconds=30
 ```
+
+### SRT-specific features
+
+#### Standard stream ID syntax
+
+In SRT, the stream ID is a string that is sent to the counterpart in order to advertise what action the caller is gonna do (publish or read), the path and the credentials. All these informations have to be encoded into a single string. This server supports two stream ID syntaxes, a custom one (that is the one reported in rest of the README) and also a [standard one](https://github.com/Haivision/srt/blob/master/docs/features/access-control.md) proposed by the authors of the protocol and sometimes enforced by some hardware. The standard syntax can be used in this way:
+
+```
+srt://localhost:8890?streamid=#!::m=publish,r=mypath,u=myuser,s=mypass&pkt_size=1316
+```
+
+Where:
+
+* key `m` contains the action (`publish` or `request`)
+* key `r` contains the path
+* key `u` contains the username
+* key `s` contains the password
+
+### WebRTC-specific features
+
+#### Connectivity issues
+
+If the server is hosted inside a container or is behind a NAT, additional configuration is required in order to allow the two WebRTC parts (server and client) to establish a connection.
+
+Make sure that `webrtcAdditionalHosts` includes your public IPs, that are IPs that can be used by clients to reach the server. If clients are on the same LAN as the server, then insert the LAN address of the server. If clients are coming from the internet, insert the public IP address of the server, or alternatively a DNS name, if you have one. You can insert multiple values to support all scenarios:
+
+```yml
+webrtcAdditionalHosts: [192.168.x.x, 1.2.3.4, my-dns.example.org, ...]
+```
+
+If there's a NAT / container between server and clients, it must be configured to route all incoming UDP packets on port 8189 to the server. If you're using Docker, this can be achieved with the flag:
+
+```sh
+docker run --rm -it \
+-p 8189:8189/udp
+....
+bluenviron/mediamtx
+```
+
+If you still have problems, maybe the UDP protocol is blocked by a firewall. Enable the local TCP listener:
+
+```yml
+# any port of choice
+webrtcLocalTCPAddress: :8189
+```
+
+If there's a NAT / container between server and clients, it must be configured to route all incoming TCP packets on port 8189 to the server.
+
+If you still have problems, enable a STUN server:
+
+```yml
+# STUN servers allows to obtain and share the public IP of the server.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+```
+
+If you really still have problems, you can force all WebRTC/ICE connections to pass through a TURN server, like coturn, that must be configured externally. The server address and credentials must be set in the configuration file:
+
+```yml
+# TURN/TURNS servers forces all traffic through them.
+webrtcICEServers2:
+- url: turn:host:port
+  username: user
+  password: password
+```
+
+Where user and pass are the username and password of the server. Note that port is not optional.
+
+If the server uses a secret-based authentication (for instance, coturn with the use-auth-secret option), it must be configured by using AUTH_SECRET as username, and the secret as password:
+
+```yml
+webrtcICEServers2:
+- url: turn:host:port
+  username: AUTH_SECRET
+  password: secret
+```
+
+where secret is the secret of the TURN server. MediaMTX will generate a set of credentials by using the secret, and credentials will be sent to clients before the WebRTC/ICE connection is established.
 
 ### RTSP-specific features
 
@@ -1530,7 +1746,7 @@ In some scenarios, when publishing or reading from the server with RTSP, frames 
   paths:
     test:
       source: rtsp://..
-      sourceProtocol: tcp
+      rtspTransport: tcp
    ```
 
 * The stream throughput is too big to be handled by the network between server and readers. Upgrade the network or decrease the stream bitrate by re-encoding it.
@@ -1562,78 +1778,16 @@ rtmps://localhost:1937/...
 
 Be aware that RTMPS is currently unsupported by all major players. However, you can use a proxy like [stunnel](https://www.stunnel.org) or [nginx](https://nginx.org/) or a dedicated _MediaMTX_ instance to decrypt streams before reading them.
 
-### WebRTC-specific features
-
-#### Connectivity issues
-
-If the server is hosted inside a container or is behind a NAT, additional configuration is required in order to allow the two WebRTC parts (the browser and the server) to establish a connection (WebRTC/ICE connection).
-
-A first method consists into forcing all WebRTC/ICE connections to pass through a single UDP server port, by using the parameters:
-
-```yml
-# public IP of the server
-webrtcICEHostNAT1To1IPs: [192.168.x.x]
-# any port of choice
-webrtcICEUDPMuxAddress: :8189
-```
-
-The NAT / container must then be configured in order to route all incoming UDP packets on port 8189 to the server. If you're using Docker, this can be achieved with the flag:
-
-```sh
-docker run --rm -it \
--p 8189:8189/udp
-....
-bluenviron/mediamtx
-```
-
-If the UDP protocol is blocked by a firewall, all WebRTC/ICE connections can be forced to pass through a single TCP server port:
-
-```yml
-# public IP of the server
-webrtcICEHostNAT1To1IPs: [192.168.x.x]
-# any port of choice
-webrtcICETCPMuxAddress: :8189
-```
-
-The NAT / container must then be configured in order to redirect all incoming TCP packets on port 8189 to the server. If you're using Docker, this can be achieved with the flag:
-
-```sh
-docker run --rm -it \
--p 8189:8189
-....
-bluenviron/mediamtx
-```
-
-Finally, if none of these methods work, you can force all WebRTC/ICE connections to pass through a TURN server, like coturn, that must be configured externally. The server address and credentials must be set in the configuration file:
-
-```yml
-webrtcICEServers2:
-- url: turn:host:port
-  username: user
-  password: password
-```
-
-Where user and pass are the username and password of the server. Note that port is not optional.
-
-If the server uses a secret-based authentication (for instance, coturn with the use-auth-secret option), it must be configured by using AUTH_SECRET as username, and the secret as password:
-
-```yml
-webrtcICEServers2:
-- url: turn:host:port
-  username: AUTH_SECRET
-  password: secret
-```
-
-where secret is the secret of the TURN server. MediaMTX will generate a set of credentials by using the secret, and credentials will be sent to clients before the WebRTC/ICE connection is established.
-
 ## Compile from source
 
 ### Standard
 
-Install Go &ge; 1.20, download the repository, open a terminal in it and run:
+Install git and Go &ge; 1.21. Clone the repository, enter into the folder and start the building process:
 
 ```sh
-go build .
+git clone https://github.com/bluenviron/mediamtx
+cd mediamtx
+CGO_ENABLED=0 go build .
 ```
 
 The command will produce the `mediamtx` binary.
@@ -1642,7 +1796,7 @@ The command will produce the `mediamtx` binary.
 
 The server can be compiled with native support for the Raspberry Pi Camera. Compilation must be performed on a Raspberry Pi, with the following dependencies:
 
-* Go &ge; 1.20
+* Go &ge; 1.21
 * `libcamera-dev`
 * `libfreetype-dev`
 * `xxd`
@@ -1650,10 +1804,69 @@ The server can be compiled with native support for the Raspberry Pi Camera. Comp
 Download the repository, open a terminal in it and run:
 
 ```sh
-cd internal/rpicamera/exe
+cd internal/protocols/rpicamera/exe
 make
-cd ../../../
+cd ../../../../
 go build -tags rpicamera .
+```
+
+The command will produce the `mediamtx` binary.
+
+### OpenWrt
+
+The compilation procedure is the same as the standard one. On the OpenWrt device, install git and Go:
+
+```sh
+opkg update
+opkg install golang git git-http
+```
+
+Clone the repository, enter into the folder and start the building process:
+
+```sh
+git clone https://github.com/bluenviron/mediamtx
+cd mediamtx
+CGO_ENABLED=0 go build .
+```
+
+The command will produce the `mediamtx` binary.
+
+If the OpenWrt device doesn't have enough resources to compile, you can [cross compile](#cross-compile) from another machine.
+
+### Cross compile
+
+Cross compilation allows to build an executable for a target machine from another machine with different operating system or architecture. This is useful in case the target machine doesn't have enough resources for compilation or if you don't want to install the compilation dependencies on it.
+
+On the machine you want to use to compile, install git and Go &ge; 1.21. Clone the repository, enter into the folder and start the building process:
+
+```sh
+git clone https://github.com/bluenviron/mediamtx
+cd mediamtx
+CGO_ENABLED=0 GOOS=my_os GOARCH=my_arch go build .
+```
+
+Replace `my_os` and `my_arch` with the operating system and architecture of your target machine. A list of all supported combinations can be obtained with:
+
+```sh
+go tool dist list
+```
+
+For instance:
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build .
+```
+
+In case of the `arm` architecture, there's an additional flag available, `GOARM`, that allows to set the ARM version:
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM=7 go build .
+```
+
+In case of the `mips` architecture, there's an additional flag available, `GOMIPS`, that allows to set additional parameters:
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=mips GOMIPS=softfloat go build .
 ```
 
 The command will produce the `mediamtx` binary.

@@ -1,7 +1,6 @@
 package conf
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,14 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bluenviron/gortsplib/v4/pkg/base"
 	"github.com/bluenviron/gortsplib/v4/pkg/headers"
-	"github.com/bluenviron/gortsplib/v4/pkg/url"
 )
 
 var rePathName = regexp.MustCompile(`^[0-9a-zA-Z_\-/\.~]+$`)
 
-// IsValidPathName checks if a path name is valid.
-func IsValidPathName(name string) error {
+func isValidPathName(name string) error {
 	if name == "" {
 		return fmt.Errorf("cannot be empty")
 	}
@@ -48,9 +46,45 @@ func srtCheckPassphrase(passphrase string) error {
 	}
 }
 
-// PathConf is a path configuration.
-type PathConf struct {
-	Regexp *regexp.Regexp `json:"-"`
+// FindPathConf returns the configuration corresponding to the given path name.
+func FindPathConf(pathConfs map[string]*Path, name string) (string, *Path, []string, error) {
+	err := isValidPathName(name)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("invalid path name: %w (%s)", err, name)
+	}
+
+	// normal path
+	if pathConf, ok := pathConfs[name]; ok {
+		return name, pathConf, nil, nil
+	}
+
+	// regular expression-based path
+	for pathConfName, pathConf := range pathConfs {
+		if pathConf.Regexp != nil && pathConfName != "all" && pathConfName != "all_others" {
+			m := pathConf.Regexp.FindStringSubmatch(name)
+			if m != nil {
+				return pathConfName, pathConf, m, nil
+			}
+		}
+	}
+
+	// all_others
+	for pathConfName, pathConf := range pathConfs {
+		if pathConfName == "all" || pathConfName == "all_others" {
+			m := pathConf.Regexp.FindStringSubmatch(name)
+			if m != nil {
+				return pathConfName, pathConf, m, nil
+			}
+		}
+	}
+
+	return "", nil, nil, fmt.Errorf("path '%s' is not configured", name)
+}
+
+// Path is a path configuration.
+type Path struct {
+	Regexp *regexp.Regexp `json:"-"`    // filled by Check()
+	Name   string         `json:"name"` // filled by Check()
 
 	// General
 	Source                     string         `json:"source"`
@@ -60,7 +94,16 @@ type PathConf struct {
 	SourceOnDemandCloseAfter   StringDuration `json:"sourceOnDemandCloseAfter"`
 	MaxReaders                 int            `json:"maxReaders"`
 	SRTReadPassphrase          string         `json:"srtReadPassphrase"`
-	Record                     bool           `json:"record"`
+	Fallback                   string         `json:"fallback"`
+
+	// Record and playback
+	Record                bool           `json:"record"`
+	Playback              bool           `json:"playback"`
+	RecordPath            string         `json:"recordPath"`
+	RecordFormat          RecordFormat   `json:"recordFormat"`
+	RecordPartDuration    StringDuration `json:"recordPartDuration"`
+	RecordSegmentDuration StringDuration `json:"recordSegmentDuration"`
+	RecordDeleteAfter     StringDuration `json:"recordDeleteAfter"`
 
 	// Authentication
 	PublishUser Credential `json:"publishUser"`
@@ -70,22 +113,23 @@ type PathConf struct {
 	ReadPass    Credential `json:"readPass"`
 	ReadIPs     IPsOrCIDRs `json:"readIPs"`
 
-	// Publisher
+	// Publisher source
 	OverridePublisher        bool   `json:"overridePublisher"`
-	DisablePublisherOverride bool   `json:"disablePublisherOverride"` // deprecated
-	Fallback                 string `json:"fallback"`
+	DisablePublisherOverride *bool  `json:"disablePublisherOverride,omitempty"` // deprecated
 	SRTPublishPassphrase     string `json:"srtPublishPassphrase"`
 
-	// RTSP
-	SourceProtocol      SourceProtocol `json:"sourceProtocol"`
-	SourceAnyPortEnable bool           `json:"sourceAnyPortEnable"`
+	// RTSP source
+	RTSPTransport       RTSPTransport  `json:"rtspTransport"`
+	RTSPAnyPort         bool           `json:"rtspAnyPort"`
+	SourceProtocol      *RTSPTransport `json:"sourceProtocol,omitempty"`      // deprecated
+	SourceAnyPortEnable *bool          `json:"sourceAnyPortEnable,omitempty"` // deprecated
 	RTSPRangeType       RTSPRangeType  `json:"rtspRangeType"`
 	RTSPRangeStart      string         `json:"rtspRangeStart"`
 
-	// Redirect
+	// Redirect source
 	SourceRedirect string `json:"sourceRedirect"`
 
-	// Raspberry Pi Camera
+	// Raspberry Pi Camera source
 	RPICameraCamID             int     `json:"rpiCameraCamID"`
 	RPICameraWidth             int     `json:"rpiCameraWidth"`
 	RPICameraHeight            int     `json:"rpiCameraHeight"`
@@ -126,56 +170,124 @@ type PathConf struct {
 	RunOnDemandRestart         bool           `json:"runOnDemandRestart"`
 	RunOnDemandStartTimeout    StringDuration `json:"runOnDemandStartTimeout"`
 	RunOnDemandCloseAfter      StringDuration `json:"runOnDemandCloseAfter"`
+	RunOnUnDemand              string         `json:"runOnUnDemand"`
 	RunOnReady                 string         `json:"runOnReady"`
 	RunOnReadyRestart          bool           `json:"runOnReadyRestart"`
 	RunOnNotReady              string         `json:"runOnNotReady"`
 	RunOnRead                  string         `json:"runOnRead"`
 	RunOnReadRestart           bool           `json:"runOnReadRestart"`
 	RunOnUnread                string         `json:"runOnUnread"`
+	RunOnRecordSegmentCreate   string         `json:"runOnRecordSegmentCreate"`
 	RunOnRecordSegmentComplete string         `json:"runOnRecordSegmentComplete"`
 }
 
-func (pconf *PathConf) check(conf *Conf, name string) error {
+func (pconf *Path) setDefaults() {
+	// General
+	pconf.Source = "publisher"
+	pconf.SourceOnDemandStartTimeout = 10 * StringDuration(time.Second)
+	pconf.SourceOnDemandCloseAfter = 10 * StringDuration(time.Second)
+
+	// Record and playback
+	pconf.Playback = true
+	pconf.RecordPath = "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f"
+	pconf.RecordFormat = RecordFormatFMP4
+	pconf.RecordPartDuration = 100 * StringDuration(time.Millisecond)
+	pconf.RecordSegmentDuration = 3600 * StringDuration(time.Second)
+	pconf.RecordDeleteAfter = 24 * 3600 * StringDuration(time.Second)
+
+	// Publisher source
+	pconf.OverridePublisher = true
+
+	// Raspberry Pi Camera source
+	pconf.RPICameraWidth = 1920
+	pconf.RPICameraHeight = 1080
+	pconf.RPICameraContrast = 1
+	pconf.RPICameraSaturation = 1
+	pconf.RPICameraSharpness = 1
+	pconf.RPICameraExposure = "normal"
+	pconf.RPICameraAWB = "auto"
+	pconf.RPICameraDenoise = "off"
+	pconf.RPICameraMetering = "centre"
+	pconf.RPICameraFPS = 30
+	pconf.RPICameraIDRPeriod = 60
+	pconf.RPICameraBitrate = 1000000
+	pconf.RPICameraProfile = "main"
+	pconf.RPICameraLevel = "4.1"
+	pconf.RPICameraAfMode = "continuous"
+	pconf.RPICameraAfRange = "normal"
+	pconf.RPICameraAfSpeed = "normal"
+	pconf.RPICameraTextOverlay = "%Y-%m-%d %H:%M:%S - MediaMTX"
+
+	// Hooks
+	pconf.RunOnDemandStartTimeout = 10 * StringDuration(time.Second)
+	pconf.RunOnDemandCloseAfter = 10 * StringDuration(time.Second)
+}
+
+func newPath(defaults *Path, partial *OptionalPath) *Path {
+	pconf := &Path{}
+	copyStructFields(pconf, defaults)
+	copyStructFields(pconf, partial.Values)
+	return pconf
+}
+
+// Clone clones the configuration.
+func (pconf Path) Clone() *Path {
+	enc, err := json.Marshal(pconf)
+	if err != nil {
+		panic(err)
+	}
+
+	var dest Path
+	err = json.Unmarshal(enc, &dest)
+	if err != nil {
+		panic(err)
+	}
+
+	dest.Regexp = pconf.Regexp
+
+	return &dest
+}
+
+func (pconf *Path) validate(conf *Conf, name string) error {
+	pconf.Name = name
+
 	switch {
-	case name == "all":
+	case name == "all_others", name == "all":
 		pconf.Regexp = regexp.MustCompile("^.*$")
 
 	case name == "" || name[0] != '~': // normal path
-		err := IsValidPathName(name)
+		err := isValidPathName(name)
 		if err != nil {
-			return fmt.Errorf("invalid path name '%s': %s", name, err)
+			return fmt.Errorf("invalid path name '%s': %w", name, err)
 		}
 
 	default: // regular expression-based path
-		pathRegexp, err := regexp.Compile(name[1:])
+		regexp, err := regexp.Compile(name[1:])
 		if err != nil {
 			return fmt.Errorf("invalid regular expression: %s", name[1:])
 		}
-		pconf.Regexp = pathRegexp
+		pconf.Regexp = regexp
 	}
 
 	// General
 
+	if pconf.Source != "publisher" && pconf.Source != "redirect" &&
+		pconf.Regexp != nil && !pconf.SourceOnDemand {
+		return fmt.Errorf("a path with a regular expression (or path 'all') and a static source" +
+			" must have 'sourceOnDemand' set to true")
+	}
 	switch {
 	case pconf.Source == "publisher":
 
 	case strings.HasPrefix(pconf.Source, "rtsp://") ||
 		strings.HasPrefix(pconf.Source, "rtsps://"):
-		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a RTSP source. use another path")
-		}
-
-		_, err := url.Parse(pconf.Source)
+		_, err := base.ParseURL(pconf.Source)
 		if err != nil {
 			return fmt.Errorf("'%s' is not a valid URL", pconf.Source)
 		}
 
 	case strings.HasPrefix(pconf.Source, "rtmp://") ||
 		strings.HasPrefix(pconf.Source, "rtmps://"):
-		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a RTMP source. use another path")
-		}
-
 		u, err := gourl.Parse(pconf.Source)
 		if err != nil {
 			return fmt.Errorf("'%s' is not a valid URL", pconf.Source)
@@ -192,10 +304,6 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 
 	case strings.HasPrefix(pconf.Source, "http://") ||
 		strings.HasPrefix(pconf.Source, "https://"):
-		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a HLS source. use another path")
-		}
-
 		u, err := gourl.Parse(pconf.Source)
 		if err != nil {
 			return fmt.Errorf("'%s' is not a valid URL", pconf.Source)
@@ -214,19 +322,12 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 		}
 
 	case strings.HasPrefix(pconf.Source, "udp://"):
-		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a HLS source. use another path")
-		}
-
 		_, _, err := net.SplitHostPort(pconf.Source[len("udp://"):])
 		if err != nil {
 			return fmt.Errorf("'%s' is not a valid UDP URL", pconf.Source)
 		}
 
 	case strings.HasPrefix(pconf.Source, "srt://"):
-		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a SRT source. use another path")
-		}
 
 		_, err := gourl.Parse(pconf.Source)
 		if err != nil {
@@ -235,86 +336,18 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 
 	case strings.HasPrefix(pconf.Source, "whep://") ||
 		strings.HasPrefix(pconf.Source, "wheps://"):
-		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') " +
-				"cannot have a WebRTC/WHEP source. use another path")
-		}
-
 		_, err := gourl.Parse(pconf.Source)
 		if err != nil {
 			return fmt.Errorf("'%s' is not a valid URL", pconf.Source)
 		}
 
 	case pconf.Source == "redirect":
-		if pconf.SourceRedirect == "" {
-			return fmt.Errorf("source redirect must be filled")
-		}
-
-		_, err := url.Parse(pconf.SourceRedirect)
-		if err != nil {
-			return fmt.Errorf("'%s' is not a valid RTSP URL", pconf.SourceRedirect)
-		}
 
 	case pconf.Source == "rpiCamera":
-		if pconf.Regexp != nil {
-			return fmt.Errorf(
-				"a path with a regular expression (or path 'all') cannot have 'rpiCamera' as source. use another path")
-		}
-
-		for otherName, otherPath := range conf.Paths {
-			if otherPath != pconf && otherPath != nil &&
-				otherPath.Source == "rpiCamera" && otherPath.RPICameraCamID == pconf.RPICameraCamID {
-				return fmt.Errorf("'rpiCamera' with same camera ID %d is used as source in two paths, '%s' and '%s'",
-					pconf.RPICameraCamID, name, otherName)
-			}
-		}
-
-		switch pconf.RPICameraExposure {
-		case "normal", "short", "long", "custom":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraExposure' value")
-		}
-
-		switch pconf.RPICameraAWB {
-		case "auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy", "custom":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraAWB' value")
-		}
-
-		switch pconf.RPICameraDenoise {
-		case "off", "cdn_off", "cdn_fast", "cdn_hq":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraDenoise' value")
-		}
-
-		switch pconf.RPICameraMetering {
-		case "centre", "spot", "matrix", "custom":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraMetering' value")
-		}
-
-		switch pconf.RPICameraAfMode {
-		case "auto", "manual", "continuous":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraAfMode' value")
-		}
-
-		switch pconf.RPICameraAfRange {
-		case "normal", "macro", "full":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraAfRange' value")
-		}
-
-		switch pconf.RPICameraAfSpeed {
-		case "normal", "fast":
-		default:
-			return fmt.Errorf("invalid 'rpiCameraAfSpeed' value")
-		}
 
 	default:
 		return fmt.Errorf("invalid source: '%s'", pconf.Source)
 	}
-
 	if pconf.SourceOnDemand {
 		if pconf.Source == "publisher" {
 			return fmt.Errorf("'sourceOnDemand' is useless when source is 'publisher'")
@@ -323,31 +356,62 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 	if pconf.SRTReadPassphrase != "" {
 		err := srtCheckPassphrase(pconf.SRTReadPassphrase)
 		if err != nil {
-			return fmt.Errorf("invalid 'readRTPassphrase': %v", err)
+			return fmt.Errorf("invalid 'readRTPassphrase': %w", err)
 		}
-	}
-
-	// Publisher
-
-	if pconf.DisablePublisherOverride {
-		pconf.OverridePublisher = true
 	}
 	if pconf.Fallback != "" {
-		if pconf.Source != "publisher" {
-			return fmt.Errorf("'fallback' can only be used when source is 'publisher'")
-		}
-
 		if strings.HasPrefix(pconf.Fallback, "/") {
-			err := IsValidPathName(pconf.Fallback[1:])
+			err := isValidPathName(pconf.Fallback[1:])
 			if err != nil {
-				return fmt.Errorf("'%s': %s", pconf.Fallback, err)
+				return fmt.Errorf("'%s': %w", pconf.Fallback, err)
 			}
 		} else {
-			_, err := url.Parse(pconf.Fallback)
+			_, err := base.ParseURL(pconf.Fallback)
 			if err != nil {
 				return fmt.Errorf("'%s' is not a valid RTSP URL", pconf.Fallback)
 			}
 		}
+	}
+
+	// Authentication
+
+	if (!pconf.PublishUser.IsEmpty() && pconf.PublishPass.IsEmpty()) ||
+		(pconf.PublishUser.IsEmpty() && !pconf.PublishPass.IsEmpty()) {
+		return fmt.Errorf("read username and password must be both filled")
+	}
+	if !pconf.PublishUser.IsEmpty() && pconf.Source != "publisher" {
+		return fmt.Errorf("'publishUser' is useless when source is not 'publisher', since " +
+			"the stream is not provided by a publisher, but by a fixed source")
+	}
+	if len(pconf.PublishIPs) > 0 && pconf.Source != "publisher" {
+		return fmt.Errorf("'publishIPs' is useless when source is not 'publisher', since " +
+			"the stream is not provided by a publisher, but by a fixed source")
+	}
+	if (!pconf.ReadUser.IsEmpty() && pconf.ReadPass.IsEmpty()) ||
+		(pconf.ReadUser.IsEmpty() && !pconf.ReadPass.IsEmpty()) {
+		return fmt.Errorf("read username and password must be both filled")
+	}
+	if contains(conf.AuthMethods, headers.AuthDigest) {
+		if pconf.PublishUser.IsHashed() ||
+			pconf.PublishPass.IsHashed() ||
+			pconf.ReadUser.IsHashed() ||
+			pconf.ReadPass.IsHashed() {
+			return fmt.Errorf("hashed credentials can't be used when the digest auth method is available")
+		}
+	}
+	if conf.ExternalAuthenticationURL != "" {
+		if !pconf.PublishUser.IsEmpty() ||
+			len(pconf.PublishIPs) > 0 ||
+			!pconf.ReadUser.IsEmpty() ||
+			len(pconf.ReadIPs) > 0 {
+			return fmt.Errorf("credentials or IPs can't be used together with 'externalAuthenticationURL'")
+		}
+	}
+
+	// Publisher source
+
+	if pconf.DisablePublisherOverride != nil {
+		pconf.OverridePublisher = !*pconf.DisablePublisherOverride
 	}
 	if pconf.SRTPublishPassphrase != "" {
 		if pconf.Source != "publisher" {
@@ -356,43 +420,77 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 
 		err := srtCheckPassphrase(pconf.SRTPublishPassphrase)
 		if err != nil {
-			return fmt.Errorf("invalid 'srtPublishPassphrase': %v", err)
+			return fmt.Errorf("invalid 'srtPublishPassphrase': %w", err)
 		}
 	}
 
-	// Authentication
+	// RTSP source
 
-	if (pconf.PublishUser != "" && pconf.PublishPass == "") ||
-		(pconf.PublishUser == "" && pconf.PublishPass != "") {
-		return fmt.Errorf("read username and password must be both filled")
+	if pconf.SourceProtocol != nil {
+		pconf.RTSPTransport = *pconf.SourceProtocol
 	}
-	if pconf.PublishUser != "" && pconf.Source != "publisher" {
-		return fmt.Errorf("'publishUser' is useless when source is not 'publisher', since " +
-			"the stream is not provided by a publisher, but by a fixed source")
+	if pconf.SourceAnyPortEnable != nil {
+		pconf.RTSPAnyPort = *pconf.SourceAnyPortEnable
 	}
-	if len(pconf.PublishIPs) > 0 && pconf.Source != "publisher" {
-		return fmt.Errorf("'publishIPs' is useless when source is not 'publisher', since " +
-			"the stream is not provided by a publisher, but by a fixed source")
-	}
-	if (pconf.ReadUser != "" && pconf.ReadPass == "") ||
-		(pconf.ReadUser == "" && pconf.ReadPass != "") {
-		return fmt.Errorf("read username and password must be both filled")
-	}
-	if contains(conf.AuthMethods, headers.AuthDigest) {
-		if strings.HasPrefix(string(pconf.PublishUser), "sha256:") ||
-			strings.HasPrefix(string(pconf.PublishPass), "sha256:") ||
-			strings.HasPrefix(string(pconf.ReadUser), "sha256:") ||
-			strings.HasPrefix(string(pconf.ReadPass), "sha256:") {
-			return fmt.Errorf("hashed credentials can't be used when the digest auth method is available")
+
+	// Redirect source
+
+	if pconf.Source == "redirect" {
+		if pconf.SourceRedirect == "" {
+			return fmt.Errorf("source redirect must be filled")
+		}
+
+		_, err := base.ParseURL(pconf.SourceRedirect)
+		if err != nil {
+			return fmt.Errorf("'%s' is not a valid RTSP URL", pconf.SourceRedirect)
 		}
 	}
-	if conf.ExternalAuthenticationURL != "" {
-		if pconf.PublishUser != "" ||
-			len(pconf.PublishIPs) > 0 ||
-			pconf.ReadUser != "" ||
-			len(pconf.ReadIPs) > 0 {
-			return fmt.Errorf("credentials or IPs can't be used together with 'externalAuthenticationURL'")
+
+	// Raspberry Pi Camera source
+
+	if pconf.Source == "rpiCamera" {
+		for otherName, otherPath := range conf.Paths {
+			if otherPath != pconf && otherPath != nil &&
+				otherPath.Source == "rpiCamera" && otherPath.RPICameraCamID == pconf.RPICameraCamID {
+				return fmt.Errorf("'rpiCamera' with same camera ID %d is used as source in two paths, '%s' and '%s'",
+					pconf.RPICameraCamID, name, otherName)
+			}
 		}
+	}
+	switch pconf.RPICameraExposure {
+	case "normal", "short", "long", "custom":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraExposure' value")
+	}
+	switch pconf.RPICameraAWB {
+	case "auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy", "custom":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraAWB' value")
+	}
+	switch pconf.RPICameraDenoise {
+	case "off", "cdn_off", "cdn_fast", "cdn_hq":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraDenoise' value")
+	}
+	switch pconf.RPICameraMetering {
+	case "centre", "spot", "matrix", "custom":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraMetering' value")
+	}
+	switch pconf.RPICameraAfMode {
+	case "auto", "manual", "continuous":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraAfMode' value")
+	}
+	switch pconf.RPICameraAfRange {
+	case "normal", "macro", "full":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraAfRange' value")
+	}
+	switch pconf.RPICameraAfSpeed {
+	case "normal", "fast":
+	default:
+		return fmt.Errorf("invalid 'rpiCameraAfSpeed' value")
 	}
 
 	// Hooks
@@ -401,38 +499,20 @@ func (pconf *PathConf) check(conf *Conf, name string) error {
 		return fmt.Errorf("a path with a regular expression (or path 'all')" +
 			" does not support option 'runOnInit'; use another path")
 	}
-	if pconf.RunOnDemand != "" && pconf.Source != "publisher" {
-		return fmt.Errorf("'runOnDemand' can be used only when source is 'publisher'")
+	if (pconf.RunOnDemand != "" || pconf.RunOnUnDemand != "") && pconf.Source != "publisher" {
+		return fmt.Errorf("'runOnDemand' and 'runOnUnDemand' can be used only when source is 'publisher'")
 	}
 
 	return nil
 }
 
-// Equal checks whether two PathConfs are equal.
-func (pconf *PathConf) Equal(other *PathConf) bool {
+// Equal checks whether two Paths are equal.
+func (pconf *Path) Equal(other *Path) bool {
 	return reflect.DeepEqual(pconf, other)
 }
 
-// Clone clones the configuration.
-func (pconf PathConf) Clone() *PathConf {
-	enc, err := json.Marshal(pconf)
-	if err != nil {
-		panic(err)
-	}
-
-	var dest PathConf
-	err = json.Unmarshal(enc, &dest)
-	if err != nil {
-		panic(err)
-	}
-
-	dest.Regexp = pconf.Regexp
-
-	return &dest
-}
-
 // HasStaticSource checks whether the path has a static source.
-func (pconf PathConf) HasStaticSource() bool {
+func (pconf Path) HasStaticSource() bool {
 	return strings.HasPrefix(pconf.Source, "rtsp://") ||
 		strings.HasPrefix(pconf.Source, "rtsps://") ||
 		strings.HasPrefix(pconf.Source, "rtmp://") ||
@@ -447,54 +527,11 @@ func (pconf PathConf) HasStaticSource() bool {
 }
 
 // HasOnDemandStaticSource checks whether the path has a on demand static source.
-func (pconf PathConf) HasOnDemandStaticSource() bool {
+func (pconf Path) HasOnDemandStaticSource() bool {
 	return pconf.HasStaticSource() && pconf.SourceOnDemand
 }
 
 // HasOnDemandPublisher checks whether the path has a on-demand publisher.
-func (pconf PathConf) HasOnDemandPublisher() bool {
+func (pconf Path) HasOnDemandPublisher() bool {
 	return pconf.RunOnDemand != ""
-}
-
-// UnmarshalJSON implements json.Unmarshaler. It is used to:
-// - force DisallowUnknownFields
-// - set default values
-func (pconf *PathConf) UnmarshalJSON(b []byte) error {
-	// General
-	pconf.Source = "publisher"
-	pconf.SourceOnDemandStartTimeout = 10 * StringDuration(time.Second)
-	pconf.SourceOnDemandCloseAfter = 10 * StringDuration(time.Second)
-	pconf.Record = true
-
-	// Publisher
-	pconf.OverridePublisher = true
-
-	// Raspberry Pi Camera
-	pconf.RPICameraWidth = 1920
-	pconf.RPICameraHeight = 1080
-	pconf.RPICameraContrast = 1
-	pconf.RPICameraSaturation = 1
-	pconf.RPICameraSharpness = 1
-	pconf.RPICameraExposure = "normal"
-	pconf.RPICameraAWB = "auto"
-	pconf.RPICameraDenoise = "off"
-	pconf.RPICameraMetering = "centre"
-	pconf.RPICameraFPS = 30
-	pconf.RPICameraIDRPeriod = 60
-	pconf.RPICameraBitrate = 1000000
-	pconf.RPICameraProfile = "main"
-	pconf.RPICameraLevel = "4.1"
-	pconf.RPICameraAfMode = "auto"
-	pconf.RPICameraAfRange = "normal"
-	pconf.RPICameraAfSpeed = "normal"
-	pconf.RPICameraTextOverlay = "%Y-%m-%d %H:%M:%S - MediaMTX"
-
-	// Hooks
-	pconf.RunOnDemandStartTimeout = 10 * StringDuration(time.Second)
-	pconf.RunOnDemandCloseAfter = 10 * StringDuration(time.Second)
-
-	type alias PathConf
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
-	return d.Decode((*alias)(pconf))
 }

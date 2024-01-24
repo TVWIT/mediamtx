@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/bluenviron/gortsplib/v4"
+	"github.com/bluenviron/gortsplib/v4/pkg/base"
 	"github.com/bluenviron/gortsplib/v4/pkg/description"
-	"github.com/bluenviron/gortsplib/v4/pkg/url"
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 )
@@ -22,14 +22,14 @@ func TestRTSPServer(t *testing.T) {
 			switch auth {
 			case "none":
 				conf = "paths:\n" +
-					"  all:\n"
+					"  all_others:\n"
 
 			case "internal":
 				conf = "rtmp: no\n" +
 					"hls: no\n" +
 					"webrtc: no\n" +
 					"paths:\n" +
-					"  all:\n" +
+					"  all_others:\n" +
 					"    publishUser: testpublisher\n" +
 					"    publishPass: testpass\n" +
 					"    publishIPs: [127.0.0.0/16]\n" +
@@ -40,7 +40,7 @@ func TestRTSPServer(t *testing.T) {
 			case "external":
 				conf = "externalAuthenticationURL: http://localhost:9120/auth\n" +
 					"paths:\n" +
-					"  all:\n"
+					"  all_others:\n"
 			}
 
 			p, ok := newInstance(conf)
@@ -70,7 +70,7 @@ func TestRTSPServer(t *testing.T) {
 
 			reader := gortsplib.Client{}
 
-			u, err := url.Parse("rtsp://testreader:testpass@127.0.0.1:8554/teststream?param=value")
+			u, err := base.ParseURL("rtsp://testreader:testpass@127.0.0.1:8554/teststream?param=value")
 			require.NoError(t, err)
 
 			err = reader.Start(u.Scheme, u.Host)
@@ -89,15 +89,38 @@ func TestRTSPServer(t *testing.T) {
 	}
 }
 
-func TestRTSPServerAuthHashed(t *testing.T) {
+func TestRTSPServerAuthHashedSHA256(t *testing.T) {
 	p, ok := newInstance(
 		"rtmp: no\n" +
 			"hls: no\n" +
 			"webrtc: no\n" +
 			"paths:\n" +
-			"  all:\n" +
+			"  all_others:\n" +
 			"    publishUser: sha256:rl3rgi4NcZkpAEcacZnQ2VuOfJ0FxAqCRaKB/SwdZoQ=\n" +
 			"    publishPass: sha256:E9JJ8stBJ7QM+nV4ZoUCeHk/gU3tPFh/5YieiJp6n2w=\n")
+	require.Equal(t, true, ok)
+	defer p.Close()
+
+	medi := testMediaH264
+
+	source := gortsplib.Client{}
+
+	err := source.StartRecording(
+		"rtsp://testuser:testpass@127.0.0.1:8554/test/stream",
+		&description.Session{Medias: []*description.Media{medi}})
+	require.NoError(t, err)
+	defer source.Close()
+}
+
+func TestRTSPServerAuthHashedArgon2(t *testing.T) {
+	p, ok := newInstance(
+		"rtmp: no\n" +
+			"hls: no\n" +
+			"webrtc: no\n" +
+			"paths:\n" +
+			"  all_others:\n" +
+			"    publishUser: argon2:$argon2id$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$Ux/LWeTgJQPyfMMJo1myR64+o8rALHoPmlE1i/TR+58\n" +
+			"    publishPass: argon2:$argon2i$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$/mrZ42TiTv1mcPnpMUera5oi0SFYbbyueAbdx5sUvWo\n")
 	require.Equal(t, true, ok)
 	defer p.Close()
 
@@ -139,7 +162,7 @@ func TestRTSPServerAuthFail(t *testing.T) {
 				"hls: no\n" +
 				"webrtc: no\n" +
 				"paths:\n" +
-				"  all:\n" +
+				"  all_others:\n" +
 				"    publishUser: testuser\n" +
 				"    publishPass: testpass\n")
 			require.Equal(t, true, ok)
@@ -183,7 +206,7 @@ func TestRTSPServerAuthFail(t *testing.T) {
 				"hls: no\n" +
 				"webrtc: no\n" +
 				"paths:\n" +
-				"  all:\n" +
+				"  all_others:\n" +
 				"    readUser: testuser\n" +
 				"    readPass: testpass\n")
 			require.Equal(t, true, ok)
@@ -191,7 +214,7 @@ func TestRTSPServerAuthFail(t *testing.T) {
 
 			c := gortsplib.Client{}
 
-			u, err := url.Parse("rtsp://" + ca.user + ":" + ca.pass + "@localhost:8554/test/stream")
+			u, err := base.ParseURL("rtsp://" + ca.user + ":" + ca.pass + "@localhost:8554/test/stream")
 			require.NoError(t, err)
 
 			err = c.Start(u.Scheme, u.Host)
@@ -208,7 +231,7 @@ func TestRTSPServerAuthFail(t *testing.T) {
 			"hls: no\n" +
 			"webrtc: no\n" +
 			"paths:\n" +
-			"  all:\n" +
+			"  all_others:\n" +
 			"    publishIPs: [128.0.0.1/32]\n")
 		require.Equal(t, true, ok)
 		defer p.Close()
@@ -227,7 +250,7 @@ func TestRTSPServerAuthFail(t *testing.T) {
 	t.Run("external", func(t *testing.T) {
 		p, ok := newInstance("externalAuthenticationURL: http://localhost:9120/auth\n" +
 			"paths:\n" +
-			"  all:\n")
+			"  all_others:\n")
 		require.Equal(t, true, ok)
 		defer p.Close()
 
@@ -254,7 +277,7 @@ func TestRTSPServerPublisherOverride(t *testing.T) {
 		t.Run(ca, func(t *testing.T) {
 			conf := "rtmp: no\n" +
 				"paths:\n" +
-				"  all:\n"
+				"  all_others:\n"
 
 			if ca == "disabled" {
 				conf += "    overridePublisher: no\n"
@@ -288,7 +311,7 @@ func TestRTSPServerPublisherOverride(t *testing.T) {
 
 			c := gortsplib.Client{}
 
-			u, err := url.Parse("rtsp://localhost:8554/teststream")
+			u, err := base.ParseURL("rtsp://localhost:8554/teststream")
 			require.NoError(t, err)
 
 			err = c.Start(u.Scheme, u.Host)
@@ -345,50 +368,6 @@ func TestRTSPServerPublisherOverride(t *testing.T) {
 			}
 
 			<-frameRecv
-		})
-	}
-}
-
-func TestRTSPServerFallback(t *testing.T) {
-	for _, ca := range []string{
-		"absolute",
-		"relative",
-	} {
-		t.Run(ca, func(t *testing.T) {
-			val := func() string {
-				if ca == "absolute" {
-					return "rtsp://localhost:8554/path2"
-				}
-				return "/path2"
-			}()
-
-			p1, ok := newInstance("rtmp: no\n" +
-				"hls: no\n" +
-				"webrtc: no\n" +
-				"paths:\n" +
-				"  path1:\n" +
-				"    fallback: " + val + "\n" +
-				"  path2:\n")
-			require.Equal(t, true, ok)
-			defer p1.Close()
-
-			source := gortsplib.Client{}
-			err := source.StartRecording("rtsp://localhost:8554/path2",
-				&description.Session{Medias: []*description.Media{testMediaH264}})
-			require.NoError(t, err)
-			defer source.Close()
-
-			u, err := url.Parse("rtsp://localhost:8554/path1")
-			require.NoError(t, err)
-
-			dest := gortsplib.Client{}
-			err = dest.Start(u.Scheme, u.Host)
-			require.NoError(t, err)
-			defer dest.Close()
-
-			desc, _, err := dest.Describe(u)
-			require.NoError(t, err)
-			require.Equal(t, 1, len(desc.Medias))
 		})
 	}
 }
