@@ -4,7 +4,7 @@ package externalcmd
 import (
 	"errors"
 	"fmt"
-	"strings"
+	"os"
 	"time"
 )
 
@@ -42,9 +42,12 @@ func NewCmd(
 ) *Cmd {
 	// replace variables in both Linux and Windows, in order to allow using the
 	// same commands on both of them.
-	for key, val := range env {
-		cmdstr = strings.ReplaceAll(cmdstr, "$"+key, val)
-	}
+	cmdstr = os.Expand(cmdstr, func(variable string) string {
+		if value, ok := env[variable]; ok {
+			return value
+		}
+		return os.Getenv(variable)
+	})
 
 	if onExit == nil {
 		onExit = func(_ error) {}
@@ -74,8 +77,13 @@ func (e *Cmd) Close() {
 func (e *Cmd) run() {
 	defer e.pool.wg.Done()
 
+	env := append([]string(nil), os.Environ()...)
+	for key, val := range e.env {
+		env = append(env, key+"="+val)
+	}
+
 	for {
-		err := e.runOSSpecific()
+		err := e.runOSSpecific(env)
 		if errors.Is(err, errTerminated) {
 			return
 		}

@@ -26,10 +26,10 @@ import (
 	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/protocols/webrtc"
 	"github.com/bluenviron/mediamtx/internal/restrictnetwork"
+	"github.com/bluenviron/mediamtx/internal/stream"
 )
 
 const (
-	pauseAfterAuthError        = 2 * time.Second
 	webrtcTurnSecretExpiration = 24 * 3600 * time.Second
 	webrtcPayloadMaxSize       = 1188 // 1200 - 12 (RTP header)
 )
@@ -164,6 +164,12 @@ type webRTCDeleteSessionReq struct {
 	res    chan webRTCDeleteSessionRes
 }
 
+type serverPathManager interface {
+	FindPathConf(req defs.PathFindPathConfReq) (*conf.Path, error)
+	AddPublisher(req defs.PathAddPublisherReq) (defs.Path, error)
+	AddReader(req defs.PathAddReaderReq) (defs.Path, *stream.Stream, error)
+}
+
 type serverParent interface {
 	logger.Writer
 }
@@ -175,7 +181,7 @@ type Server struct {
 	ServerKey             string
 	ServerCert            string
 	AllowOrigin           string
-	TrustedProxies        conf.IPsOrCIDRs
+	TrustedProxies        conf.IPNetworks
 	ReadTimeout           conf.StringDuration
 	WriteQueueSize        int
 	LocalUDPAddress       string
@@ -185,7 +191,7 @@ type Server struct {
 	AdditionalHosts       []string
 	ICEServers            []conf.WebRTCICEServer
 	ExternalCmdPool       *externalcmd.Pool
-	PathManager           defs.PathManager
+	PathManager           serverPathManager
 	Parent                serverParent
 
 	ctx              context.Context

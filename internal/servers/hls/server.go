@@ -11,10 +11,23 @@ import (
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/stream"
 )
 
 // ErrMuxerNotFound is returned when a muxer is not found.
 var ErrMuxerNotFound = errors.New("muxer not found")
+
+type serverGetMuxerRes struct {
+	muxer *muxer
+	err   error
+}
+
+type serverGetMuxerReq struct {
+	path           string
+	remoteAddr     string
+	sourceOnDemand bool
+	res            chan serverGetMuxerRes
+}
 
 type serverAPIMuxersListRes struct {
 	data *defs.APIHLSMuxerList
@@ -35,30 +48,34 @@ type serverAPIMuxersGetReq struct {
 	res  chan serverAPIMuxersGetRes
 }
 
+type serverPathManager interface {
+	FindPathConf(req defs.PathFindPathConfReq) (*conf.Path, error)
+	AddReader(req defs.PathAddReaderReq) (defs.Path, *stream.Stream, error)
+}
+
 type serverParent interface {
 	logger.Writer
 }
 
 // Server is a HLS server.
 type Server struct {
-	Address                   string
-	Encryption                bool
-	ServerKey                 string
-	ServerCert                string
-	ExternalAuthenticationURL string
-	AlwaysRemux               bool
-	Variant                   conf.HLSVariant
-	SegmentCount              int
-	SegmentDuration           conf.StringDuration
-	PartDuration              conf.StringDuration
-	SegmentMaxSize            conf.StringSize
-	AllowOrigin               string
-	TrustedProxies            conf.IPsOrCIDRs
-	Directory                 string
-	ReadTimeout               conf.StringDuration
-	WriteQueueSize            int
-	PathManager               defs.PathManager
-	Parent                    serverParent
+	Address         string
+	Encryption      bool
+	ServerKey       string
+	ServerCert      string
+	AlwaysRemux     bool
+	Variant         conf.HLSVariant
+	SegmentCount    int
+	SegmentDuration conf.StringDuration
+	PartDuration    conf.StringDuration
+	SegmentMaxSize  conf.StringSize
+	AllowOrigin     string
+	TrustedProxies  conf.IPNetworks
+	Directory       string
+	ReadTimeout     conf.StringDuration
+	WriteQueueSize  int
+	PathManager     serverPathManager
+	Parent          serverParent
 
 	ctx        context.Context
 	ctxCancel  func()
@@ -67,12 +84,12 @@ type Server struct {
 	muxers     map[string]*muxer
 
 	// in
-	chPathReady     chan defs.Path
-	chPathNotReady  chan defs.Path
-	chHandleRequest chan muxerHandleRequestReq
-	chCloseMuxer    chan *muxer
-	chAPIMuxerList  chan serverAPIMuxersListReq
-	chAPIMuxerGet   chan serverAPIMuxersGetReq
+	chPathReady    chan defs.Path
+	chPathNotReady chan defs.Path
+	chGetMuxer     chan serverGetMuxerReq
+	chCloseMuxer   chan *muxer
+	chAPIMuxerList chan serverAPIMuxersListReq
+	chAPIMuxerGet  chan serverAPIMuxersGetReq
 }
 
 // Initialize initializes the server.
@@ -84,7 +101,7 @@ func (s *Server) Initialize() error {
 	s.muxers = make(map[string]*muxer)
 	s.chPathReady = make(chan defs.Path)
 	s.chPathNotReady = make(chan defs.Path)
-	s.chHandleRequest = make(chan muxerHandleRequestReq)
+	s.chGetMuxer = make(chan serverGetMuxerReq)
 	s.chCloseMuxer = make(chan *muxer)
 	s.chAPIMuxerList = make(chan serverAPIMuxersListReq)
 	s.chAPIMuxerGet = make(chan serverAPIMuxersGetReq)
@@ -146,22 +163,21 @@ outer:
 				delete(s.muxers, pa.Name())
 			}
 
-		case req := <-s.chHandleRequest:
-			r, ok := s.muxers[req.path]
+		case req := <-s.chGetMuxer:
+			mux, ok := s.muxers[req.path]
 			switch {
 			case ok:
-				r.processRequest(&req)
-
+				req.res <- serverGetMuxerRes{muxer: mux}
+			case s.AlwaysRemux && !req.sourceOnDemand:
+				req.res <- serverGetMuxerRes{err: fmt.Errorf("muxer is waiting to be created")}
 			default:
-				r := s.createMuxer(req.path, req.ctx.ClientIP())
-				r.processRequest(&req)
+				req.res <- serverGetMuxerRes{muxer: s.createMuxer(req.path, req.remoteAddr)}
 			}
 
 		case c := <-s.chCloseMuxer:
-			if c2, ok := s.muxers[c.PathName()]; !ok || c2 != c {
-				continue
+			if c2, ok := s.muxers[c.PathName()]; ok && c2 == c {
+				delete(s.muxers, c.PathName())
 			}
-			delete(s.muxers, c.PathName())
 
 		case req := <-s.chAPIMuxerList:
 			data := &defs.APIHLSMuxerList{
@@ -201,20 +217,19 @@ outer:
 
 func (s *Server) createMuxer(pathName string, remoteAddr string) *muxer {
 	r := &muxer{
-		parentCtx:                 s.ctx,
-		remoteAddr:                remoteAddr,
-		externalAuthenticationURL: s.ExternalAuthenticationURL,
-		variant:                   s.Variant,
-		segmentCount:              s.SegmentCount,
-		segmentDuration:           s.SegmentDuration,
-		partDuration:              s.PartDuration,
-		segmentMaxSize:            s.SegmentMaxSize,
-		directory:                 s.Directory,
-		writeQueueSize:            s.WriteQueueSize,
-		wg:                        &s.wg,
-		pathName:                  pathName,
-		pathManager:               s.PathManager,
-		parent:                    s,
+		parentCtx:       s.ctx,
+		remoteAddr:      remoteAddr,
+		variant:         s.Variant,
+		segmentCount:    s.SegmentCount,
+		segmentDuration: s.SegmentDuration,
+		partDuration:    s.PartDuration,
+		segmentMaxSize:  s.SegmentMaxSize,
+		directory:       s.Directory,
+		writeQueueSize:  s.WriteQueueSize,
+		wg:              &s.wg,
+		pathName:        pathName,
+		pathManager:     s.PathManager,
+		parent:          s,
 	}
 	r.initialize()
 	s.muxers[pathName] = r
@@ -229,18 +244,16 @@ func (s *Server) closeMuxer(c *muxer) {
 	}
 }
 
-func (s *Server) handleRequest(req muxerHandleRequestReq) {
-	req.res = make(chan *muxer)
+func (s *Server) getMuxer(req serverGetMuxerReq) (*muxer, error) {
+	req.res = make(chan serverGetMuxerRes)
 
 	select {
-	case s.chHandleRequest <- req:
-		muxer := <-req.res
-		if muxer != nil {
-			req.ctx.Request.URL.Path = req.file
-			muxer.handleRequest(req.ctx)
-		}
+	case s.chGetMuxer <- req:
+		res := <-req.res
+		return res.muxer, res.err
 
 	case <-s.ctx.Done():
+		return nil, fmt.Errorf("terminated")
 	}
 }
 

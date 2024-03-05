@@ -12,20 +12,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
-	"github.com/bluenviron/mediamtx/internal/protocols/httpserv"
+	"github.com/bluenviron/mediamtx/internal/protocols/httpp"
 	"github.com/bluenviron/mediamtx/internal/restrictnetwork"
 )
 
-const (
-	pauseAfterAuthError = 2 * time.Second
-)
+//go:generate go run ./hlsjsdownloader
 
 //go:embed index.html
 var hlsIndex []byte
 
+//nolint:typecheck
 //go:embed hls.min.js
 var hlsMinJS []byte
 
@@ -35,12 +35,12 @@ type httpServer struct {
 	serverKey      string
 	serverCert     string
 	allowOrigin    string
-	trustedProxies conf.IPsOrCIDRs
+	trustedProxies conf.IPNetworks
 	readTimeout    conf.StringDuration
-	pathManager    defs.PathManager
+	pathManager    serverPathManager
 	parent         *Server
 
-	inner *httpserv.WrappedServer
+	inner *httpp.WrappedServer
 }
 
 func (s *httpServer) initialize() error {
@@ -61,7 +61,7 @@ func (s *httpServer) initialize() error {
 	network, address := restrictnetwork.Restrict("tcp", s.address)
 
 	var err error
-	s.inner, err = httpserv.NewWrappedServer(
+	s.inner, err = httpp.NewWrappedServer(
 		network,
 		address,
 		time.Duration(s.readTimeout),
@@ -134,7 +134,7 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 		dir, fname = pa, ""
 
 		if !strings.HasSuffix(dir, "/") {
-			ctx.Writer.Header().Set("Location", httpserv.LocationWithTrailingSlash(ctx.Request.URL))
+			ctx.Writer.Header().Set("Location", httpp.LocationWithTrailingSlash(ctx.Request.URL))
 			ctx.Writer.WriteHeader(http.StatusMovedPermanently)
 			return
 		}
@@ -147,7 +147,7 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 
 	user, pass, hasCredentials := ctx.Request.BasicAuth()
 
-	res := s.pathManager.FindPathConf(defs.PathFindPathConfReq{
+	pathConf, err := s.pathManager.FindPathConf(defs.PathFindPathConfReq{
 		AccessRequest: defs.PathAccessRequest{
 			Name:    dir,
 			Query:   ctx.Request.URL.RawQuery,
@@ -155,26 +155,22 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 			IP:      net.ParseIP(ctx.ClientIP()),
 			User:    user,
 			Pass:    pass,
-			Proto:   defs.AuthProtocolHLS,
+			Proto:   auth.ProtocolHLS,
 		},
 	})
-	if res.Err != nil {
-		var terr defs.AuthenticationError
-		if errors.As(res.Err, &terr) {
+	if err != nil {
+		var terr auth.Error
+		if errors.As(err, &terr) {
 			if !hasCredentials {
 				ctx.Header("WWW-Authenticate", `Basic realm="mediamtx"`)
 				ctx.Writer.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 
-			ip := ctx.ClientIP()
-			_, port, _ := net.SplitHostPort(ctx.Request.RemoteAddr)
-			remoteAddr := net.JoinHostPort(ip, port)
-
-			s.Log(logger.Info, "connection %v failed to authenticate: %v", remoteAddr, terr.Message)
+			s.Log(logger.Info, "connection %v failed to authenticate: %v", httpp.RemoteAddr(ctx), terr.Message)
 
 			// wait some seconds to mitigate brute force attacks
-			<-time.After(pauseAfterAuthError)
+			<-time.After(auth.PauseAfterError)
 
 			ctx.Writer.WriteHeader(http.StatusUnauthorized)
 			return
@@ -192,10 +188,23 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 		ctx.Writer.Write(hlsIndex)
 
 	default:
-		s.parent.handleRequest(muxerHandleRequestReq{
-			path: dir,
-			file: fname,
-			ctx:  ctx,
+		mux, err := s.parent.getMuxer(serverGetMuxerReq{
+			path:           dir,
+			remoteAddr:     httpp.RemoteAddr(ctx),
+			sourceOnDemand: pathConf.SourceOnDemand,
 		})
+		if err != nil {
+			ctx.Writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		mi := mux.getInstance()
+		if mi == nil {
+			ctx.Writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		ctx.Request.URL.Path = fname
+		mi.handleRequest(ctx)
 	}
 }

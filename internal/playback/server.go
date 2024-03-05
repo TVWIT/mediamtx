@@ -4,19 +4,16 @@ package playback
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
-	"path/filepath"
-	"sort"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/logger"
-	"github.com/bluenviron/mediamtx/internal/protocols/httpserv"
-	"github.com/bluenviron/mediamtx/internal/record"
+	"github.com/bluenviron/mediamtx/internal/protocols/httpp"
 	"github.com/bluenviron/mediamtx/internal/restrictnetwork"
 	"github.com/gin-gonic/gin"
 )
@@ -26,6 +23,21 @@ const (
 )
 
 var errNoSegmentsFound = errors.New("no recording segments found for the given timestamp")
+
+func parseDuration(raw string) (time.Duration, error) {
+	// seconds
+	if secs, err := strconv.ParseFloat(raw, 64); err == nil {
+		return time.Duration(secs * float64(time.Second)), nil
+	}
+
+	// deprecated, golang format
+	return time.ParseDuration(raw)
+}
+
+type listEntry struct {
+	Start    time.Time `json:"start"`
+	Duration float64   `json:"duration"`
+}
 
 type writerWrapper struct {
 	ctx     *gin.Context
@@ -41,94 +53,15 @@ func (w *writerWrapper) Write(p []byte) (int, error) {
 	return w.ctx.Writer.Write(p)
 }
 
-type segment struct {
-	fpath string
-	start time.Time
-}
-
-func findSegments(
-	pathConf *conf.Path,
-	pathName string,
-	start time.Time,
-	duration time.Duration,
-) ([]segment, error) {
-	if !pathConf.Playback {
-		return nil, fmt.Errorf("playback is disabled on path '%s'", pathName)
-	}
-
-	recordPath := record.PathAddExtension(
-		strings.ReplaceAll(pathConf.RecordPath, "%path", pathName),
-		pathConf.RecordFormat,
-	)
-
-	// we have to convert to absolute paths
-	// otherwise, recordPath and fpath inside Walk() won't have common elements
-	recordPath, _ = filepath.Abs(recordPath)
-
-	commonPath := record.CommonPath(recordPath)
-	end := start.Add(duration)
-	var segments []segment
-
-	// gather all segments that starts before the end of the playback
-	err := filepath.Walk(commonPath, func(fpath string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			var pa record.Path
-			ok := pa.Decode(recordPath, fpath)
-			if ok && !end.Before(time.Time(pa)) {
-				segments = append(segments, segment{
-					fpath: fpath,
-					start: time.Time(pa),
-				})
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if segments == nil {
-		return nil, errNoSegmentsFound
-	}
-
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].start.Before(segments[j].start)
-	})
-
-	// find the segment that may contain the start of the playback and remove all previous ones
-	found := false
-	for i := 0; i < len(segments)-1; i++ {
-		if !start.Before(segments[i].start) && start.Before(segments[i+1].start) {
-			segments = segments[i:]
-			found = true
-			break
-		}
-	}
-
-	// otherwise, keep the last segment only and check whether it may contain the start of the playback
-	if !found {
-		segments = segments[len(segments)-1:]
-		if segments[len(segments)-1].start.After(start) {
-			return nil, errNoSegmentsFound
-		}
-	}
-
-	return segments, nil
-}
-
 // Server is the playback server.
 type Server struct {
 	Address     string
 	ReadTimeout conf.StringDuration
 	PathConfs   map[string]*conf.Path
+	AuthManager *auth.Manager
 	Parent      logger.Writer
 
-	httpServer *httpserv.WrappedServer
+	httpServer *httpp.WrappedServer
 	mutex      sync.RWMutex
 }
 
@@ -139,12 +72,13 @@ func (p *Server) Initialize() error {
 
 	group := router.Group("/")
 
+	group.GET("/list", p.onList)
 	group.GET("/get", p.onGet)
 
 	network, address := restrictnetwork.Restrict("tcp", p.Address)
 
 	var err error
-	p.httpServer, err = httpserv.NewWrappedServer(
+	p.httpServer, err = httpp.NewWrappedServer(
 		network,
 		address,
 		time.Duration(p.ReadTimeout),
@@ -196,8 +130,99 @@ func (p *Server) safeFindPathConf(name string) (*conf.Path, error) {
 	return pathConf, err
 }
 
+func (p *Server) doAuth(ctx *gin.Context, pathName string) bool {
+	user, pass, hasCredentials := ctx.Request.BasicAuth()
+
+	err := p.AuthManager.Authenticate(&auth.Request{
+		User:   user,
+		Pass:   pass,
+		IP:     net.ParseIP(ctx.ClientIP()),
+		Action: conf.AuthActionPlayback,
+		Path:   pathName,
+	})
+	if err != nil {
+		if !hasCredentials {
+			ctx.Header("WWW-Authenticate", `Basic realm="mediamtx"`)
+			ctx.Writer.WriteHeader(http.StatusUnauthorized)
+			return false
+		}
+
+		var terr auth.Error
+		errors.As(err, &terr)
+
+		p.Log(logger.Info, "connection %v failed to authenticate: %v", httpp.RemoteAddr(ctx), terr.Message)
+
+		// wait some seconds to mitigate brute force attacks
+		<-time.After(auth.PauseAfterError)
+
+		ctx.Writer.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+
+	return true
+}
+
+func (p *Server) onList(ctx *gin.Context) {
+	pathName := ctx.Query("path")
+
+	if !p.doAuth(ctx, pathName) {
+		return
+	}
+
+	pathConf, err := p.safeFindPathConf(pathName)
+	if err != nil {
+		p.writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	if !pathConf.Playback {
+		p.writeError(ctx, http.StatusBadRequest, fmt.Errorf("playback is disabled on path '%s'", pathName))
+		return
+	}
+
+	segments, err := FindSegments(pathConf, pathName)
+	if err != nil {
+		if errors.Is(err, errNoSegmentsFound) {
+			p.writeError(ctx, http.StatusNotFound, err)
+		} else {
+			p.writeError(ctx, http.StatusBadRequest, err)
+		}
+		return
+	}
+
+	if pathConf.RecordFormat != conf.RecordFormatFMP4 {
+		p.writeError(ctx, http.StatusBadRequest, fmt.Errorf("format of recording segments is not fmp4"))
+		return
+	}
+
+	for _, seg := range segments {
+		d, err := fmp4Duration(seg.fpath)
+		if err != nil {
+			p.writeError(ctx, http.StatusInternalServerError, err)
+			return
+		}
+		seg.duration = d
+	}
+
+	segments = mergeConcatenatedSegments(segments)
+
+	out := make([]listEntry, len(segments))
+	for i, seg := range segments {
+		out[i] = listEntry{
+			Start:    seg.Start,
+			Duration: seg.duration.Seconds(),
+		}
+	}
+
+	ctx.JSON(http.StatusOK, out)
+}
+
 func (p *Server) onGet(ctx *gin.Context) {
 	pathName := ctx.Query("path")
+
+	if !p.doAuth(ctx, pathName) {
+		return
+	}
 
 	start, err := time.Parse(time.RFC3339, ctx.Query("start"))
 	if err != nil {
@@ -205,14 +230,14 @@ func (p *Server) onGet(ctx *gin.Context) {
 		return
 	}
 
-	duration, err := time.ParseDuration(ctx.Query("duration"))
+	duration, err := parseDuration(ctx.Query("duration"))
 	if err != nil {
 		p.writeError(ctx, http.StatusBadRequest, fmt.Errorf("invalid duration: %w", err))
 		return
 	}
 
 	format := ctx.Query("format")
-	if format != "fmp4" {
+	if format != "" && format != "fmp4" {
 		p.writeError(ctx, http.StatusBadRequest, fmt.Errorf("invalid format: %s", format))
 		return
 	}
@@ -223,7 +248,7 @@ func (p *Server) onGet(ctx *gin.Context) {
 		return
 	}
 
-	segments, err := findSegments(pathConf, pathName, start, duration)
+	segments, err := findSegmentsInTimespan(pathConf, pathName, start, duration)
 	if err != nil {
 		if errors.Is(err, errNoSegmentsFound) {
 			p.writeError(ctx, http.StatusNotFound, err)
@@ -239,7 +264,7 @@ func (p *Server) onGet(ctx *gin.Context) {
 	}
 
 	ww := &writerWrapper{ctx: ctx}
-	minTime := start.Sub(segments[0].start)
+	minTime := start.Sub(segments[0].Start)
 	maxTime := minTime + duration
 
 	elapsed, err := fmp4SeekAndMux(
@@ -264,7 +289,7 @@ func (p *Server) onGet(ctx *gin.Context) {
 			return
 		}
 
-		// something has been already written: abort and write to logs only
+		// something has already been written: abort and write logs only
 		p.Log(logger.Error, err.Error())
 		return
 	}
@@ -274,8 +299,8 @@ func (p *Server) onGet(ctx *gin.Context) {
 	overallElapsed := elapsed
 
 	for _, seg := range segments[1:] {
-		// there's a gap between segments; stop serving the recording.
-		if seg.start.Before(start.Add(-concatenationTolerance)) || seg.start.After(start.Add(concatenationTolerance)) {
+		// there's a gap between segments, stop serving the recording
+		if seg.Start.Before(start.Add(-concatenationTolerance)) || seg.Start.After(start.Add(concatenationTolerance)) {
 			return
 		}
 
@@ -292,7 +317,7 @@ func (p *Server) onGet(ctx *gin.Context) {
 			return
 		}
 
-		start = seg.start.Add(elapsed)
+		start = seg.Start.Add(elapsed)
 		duration -= elapsed
 		overallElapsed += elapsed
 	}

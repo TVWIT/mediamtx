@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +22,7 @@ import (
 	pwebrtc "github.com/pion/webrtc/v3"
 
 	"github.com/bluenviron/mediamtx/internal/asyncwriter"
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/hooks"
@@ -31,6 +31,9 @@ import (
 	"github.com/bluenviron/mediamtx/internal/stream"
 	"github.com/bluenviron/mediamtx/internal/unit"
 )
+
+var errNoSupportedCodecs = errors.New(
+	"the stream doesn't contain any supported codec, which are currently AV1, VP9, VP8, H264, Opus, G722, G711")
 
 type setupStreamFunc func(*webrtc.OutgoingTrack) error
 
@@ -280,7 +283,7 @@ type session struct {
 	req             webRTCNewSessionReq
 	wg              *sync.WaitGroup
 	externalCmdPool *externalcmd.Pool
-	pathManager     defs.PathManager
+	pathManager     serverPathManager
 	parent          *Server
 
 	ctx       context.Context
@@ -363,7 +366,7 @@ func (s *session) runInner2() (int, error) {
 func (s *session) runPublish() (int, error) {
 	ip, _, _ := net.SplitHostPort(s.req.remoteAddr)
 
-	res := s.pathManager.AddPublisher(defs.PathAddPublisherReq{
+	path, err := s.pathManager.AddPublisher(defs.PathAddPublisherReq{
 		Author: s,
 		AccessRequest: defs.PathAccessRequest{
 			Name:    s.req.pathName,
@@ -372,23 +375,23 @@ func (s *session) runPublish() (int, error) {
 			IP:      net.ParseIP(ip),
 			User:    s.req.user,
 			Pass:    s.req.pass,
-			Proto:   defs.AuthProtocolWebRTC,
+			Proto:   auth.ProtocolWebRTC,
 			ID:      &s.uuid,
 		},
 	})
-	if res.Err != nil {
-		var terr defs.AuthenticationError
-		if errors.As(res.Err, &terr) {
+	if err != nil {
+		var terr auth.Error
+		if errors.As(err, &terr) {
 			// wait some seconds to mitigate brute force attacks
-			<-time.After(pauseAfterAuthError)
+			<-time.After(auth.PauseAfterError)
 
-			return http.StatusUnauthorized, res.Err
+			return http.StatusUnauthorized, err
 		}
 
-		return http.StatusBadRequest, res.Err
+		return http.StatusBadRequest, err
 	}
 
-	defer res.Path.RemovePublisher(defs.PathRemovePublisherReq{Author: s})
+	defer path.RemovePublisher(defs.PathRemovePublisherReq{Author: s})
 
 	iceServers, err := s.parent.generateICEServers()
 	if err != nil {
@@ -450,13 +453,13 @@ func (s *session) runPublish() (int, error) {
 
 	medias := webrtc.TracksToMedias(tracks)
 
-	rres := res.Path.StartPublisher(defs.PathStartPublisherReq{
+	stream, err := path.StartPublisher(defs.PathStartPublisherReq{
 		Author:             s,
 		Desc:               &description.Session{Medias: medias},
 		GenerateRTPPackets: false,
 	})
-	if rres.Err != nil {
-		return 0, rres.Err
+	if err != nil {
+		return 0, err
 	}
 
 	timeDecoder := rtptime.NewGlobalDecoder()
@@ -478,7 +481,7 @@ func (s *session) runPublish() (int, error) {
 					continue
 				}
 
-				rres.Stream.WriteRTPPacket(cmedia, cmedia.Formats[0], pkt, time.Now(), pts)
+				stream.WriteRTPPacket(cmedia, cmedia.Formats[0], pkt, time.Now(), pts)
 			}
 		}()
 	}
@@ -495,7 +498,7 @@ func (s *session) runPublish() (int, error) {
 func (s *session) runRead() (int, error) {
 	ip, _, _ := net.SplitHostPort(s.req.remoteAddr)
 
-	res := s.pathManager.AddReader(defs.PathAddReaderReq{
+	path, stream, err := s.pathManager.AddReader(defs.PathAddReaderReq{
 		Author: s,
 		AccessRequest: defs.PathAccessRequest{
 			Name:  s.req.pathName,
@@ -503,26 +506,27 @@ func (s *session) runRead() (int, error) {
 			IP:    net.ParseIP(ip),
 			User:  s.req.user,
 			Pass:  s.req.pass,
-			Proto: defs.AuthProtocolWebRTC,
+			Proto: auth.ProtocolWebRTC,
 			ID:    &s.uuid,
 		},
 	})
-	if res.Err != nil {
-		var terr defs.AuthenticationError
-		if errors.As(res.Err, &terr) {
+	if err != nil {
+		var terr1 auth.Error
+		if errors.As(err, &terr1) {
 			// wait some seconds to mitigate brute force attacks
-			<-time.After(pauseAfterAuthError)
-			return http.StatusUnauthorized, res.Err
+			<-time.After(auth.PauseAfterError)
+			return http.StatusUnauthorized, err
 		}
 
-		if strings.HasPrefix(res.Err.Error(), "no one is publishing") {
-			return http.StatusNotFound, res.Err
+		var terr2 *defs.PathNoOnePublishingError
+		if errors.As(err, &terr2) {
+			return http.StatusNotFound, err
 		}
 
-		return http.StatusBadRequest, res.Err
+		return http.StatusBadRequest, err
 	}
 
-	defer res.Path.RemoveReader(defs.PathRemoveReaderReq{Author: s})
+	defer path.RemoveReader(defs.PathRemoveReaderReq{Author: s})
 
 	iceServers, err := s.parent.generateICEServers()
 	if err != nil {
@@ -543,12 +547,11 @@ func (s *session) runRead() (int, error) {
 
 	writer := asyncwriter.New(s.writeQueueSize, s)
 
-	videoTrack, videoSetup := findVideoTrack(res.Stream, writer)
-	audioTrack, audioSetup := findAudioTrack(res.Stream, writer)
+	videoTrack, videoSetup := findVideoTrack(stream, writer)
+	audioTrack, audioSetup := findAudioTrack(stream, writer)
 
 	if videoTrack == nil && audioTrack == nil {
-		return http.StatusBadRequest, fmt.Errorf(
-			"the stream doesn't contain any supported codec, which are currently AV1, VP9, VP8, H264, Opus, G722, G711")
+		return http.StatusBadRequest, errNoSupportedCodecs
 	}
 
 	tracks, err := pc.SetupOutgoingTracks(videoTrack, audioTrack)
@@ -576,7 +579,7 @@ func (s *session) runRead() (int, error) {
 	s.pc = pc
 	s.mutex.Unlock()
 
-	defer res.Stream.RemoveReader(writer)
+	defer stream.RemoveReader(writer)
 
 	n := 0
 
@@ -596,13 +599,13 @@ func (s *session) runRead() (int, error) {
 	}
 
 	s.Log(logger.Info, "is reading from path '%s', %s",
-		res.Path.Name(), defs.FormatsInfo(res.Stream.FormatsForReader(writer)))
+		path.Name(), defs.FormatsInfo(stream.FormatsForReader(writer)))
 
 	onUnreadHook := hooks.OnRead(hooks.OnReadParams{
 		Logger:          s,
 		ExternalCmdPool: s.externalCmdPool,
-		Conf:            res.Path.SafeConf(),
-		ExternalCmdEnv:  res.Path.ExternalCmdEnv(),
+		Conf:            path.SafeConf(),
+		ExternalCmdEnv:  path.ExternalCmdEnv(),
 		Reader:          s.APIReaderDescribe(),
 		Query:           s.req.query,
 	})

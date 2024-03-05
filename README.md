@@ -14,7 +14,7 @@
 
 <br>
 
-_MediaMTX_ (formerly _rtsp-simple-server_) is a ready-to-use and zero-dependency real-time media server and media proxy that allows to publish, read, proxy and record video and audio streams. It has been conceived as a "media router" that routes media streams from one end to the other.
+_MediaMTX_ (formerly _rtsp-simple-server_) is a ready-to-use and zero-dependency real-time media server and media proxy that allows to publish, read, proxy, record and playback video and audio streams. It has been conceived as a "media router" that routes media streams from one end to the other.
 
 Live streams can be published to the server with:
 
@@ -42,7 +42,7 @@ And can be read from the server with:
 |[RTMP](#rtmp)|RTMP, RTMPS, Enhanced RTMP|H264|MPEG-4 Audio (AAC), MPEG-1/2 Audio (MP3)|
 |[HLS](#hls)|Low-Latency HLS, MP4-based HLS, legacy HLS|AV1, VP9, H265, H264|Opus, MPEG-4 Audio (AAC)|
 
-And can be recorded with:
+And can be recorded and played back with:
 
 |format|video codecs|audio codecs|
 |------|------------|------------|
@@ -56,10 +56,10 @@ And can be recorded with:
 * Streams are automatically converted from a protocol to another
 * Serve multiple streams at once in separate paths
 * Record streams to disk
-* Playback recordings
-* Authenticate users; use internal or external authentication
+* Playback recorded streams
+* Authenticate users
 * Redirect readers to other RTSP servers (load balancing)
-* Query and control the server through the API
+* Control the server through the Control API
 * Reload the configuration without disconnecting existing clients (hot reloading)
 * Read Prometheus-compatible metrics
 * Run hooks (external commands) when clients connect, disconnect, read or publish streams
@@ -113,10 +113,13 @@ _rtsp-simple-server_ has been rebranded as _MediaMTX_. The reason is pretty obvi
 * [Other features](#other-features)
   * [Configuration](#configuration)
   * [Authentication](#authentication)
+    * [Internal](#internal)
+    * [HTTP-based](#http-based)
+    * [JWT-based](#jwt-based)
   * [Encrypt the configuration](#encrypt-the-configuration)
   * [Remuxing, re-encoding, compression](#remuxing-re-encoding-compression)
   * [Record streams to disk](#record-streams-to-disk)
-  * [Playback recordings](#playback-recordings)
+  * [Playback recorded streams](#playback-recorded-streams)
   * [Forward streams to other servers](#forward-streams-to-other-servers)
   * [Proxy requests to other servers](#proxy-requests-to-other-servers)
   * [On-demand publishing](#on-demand-publishing)
@@ -125,7 +128,7 @@ _rtsp-simple-server_ has been rebranded as _MediaMTX_. The reason is pretty obvi
     * [OpenWrt](#openwrt)
     * [Windows](#windows)
   * [Hooks](#hooks)
-  * [API](#api)
+  * [Control API](#control-api)
   * [Metrics](#metrics)
   * [pprof](#pprof)
   * [SRT-specific features](#srt-specific-features)
@@ -144,6 +147,7 @@ _rtsp-simple-server_ has been rebranded as _MediaMTX_. The reason is pretty obvi
   * [OpenWrt](#openwrt-1)
   * [Cross compile](#cross-compile)
   * [Compile for all supported platforms](#compile-for-all-supported-platforms)
+* [License](#license)
 * [Specifications](#specifications)
 * [Related projects](#related-projects)
 
@@ -420,7 +424,7 @@ This web page can be embedded into another web page by using an iframe:
 <iframe src="http://mediamtx-ip:8889/mystream/publish" scrolling="no"></iframe>
 ```
 
-For more advanced setups, you can create and serve a custom web page by starting from the [source code of the publish page](internal/servers/webrtc/publish_index.html).
+For more advanced setups, you can create and serve a custom web page by starting from the [source code of the WebRTC publish page](internal/servers/webrtc/publish_index.html).
 
 ### By device
 
@@ -810,7 +814,7 @@ This web page can be embedded into another web page by using an iframe:
 <iframe src="http://mediamtx-ip:8889/mystream" scrolling="no"></iframe>
 ```
 
-For more advanced setups, you can create and serve a custom web page by starting from the [source code of the read page](internal/servers/webrtc/read_index.html).
+For more advanced setups, you can create and serve a custom web page by starting from the [source code of the WebRTC read page](internal/servers/webrtc/read_index.html).
 
 Web browsers can also read a stream with the [HLS protocol](#hls). Latency is higher but there are less problems related to connectivity between server and clients, furthermore the server load can be balanced by using a common HTTP CDN (like CloudFront or Cloudflare), and this allows to handle readers in the order of millions. Visit the web page:
 
@@ -823,6 +827,8 @@ This web page can be embedded into another web page by using an iframe:
 ```html
 <iframe src="http://mediamtx-ip:8888/mystream" scrolling="no"></iframe>
 ```
+
+For more advanced setups, you can create and serve a custom web page by starting from the [source code of the HLS read page](internal/servers/hls/index.html).
 
 ### By protocol
 
@@ -1021,35 +1027,48 @@ There are 3 ways to change the configuration:
    docker run --rm -it --network=host -e MTX_PATHS_TEST_SOURCE=rtsp://myurl bluenviron/mediamtx
    ```
 
-3. By using the [API](#api).
+3. By using the [Control API](#control-api).
 
 ### Authentication
 
-Edit `mediamtx.yml` and set `publishUser` and `publishPass`:
+#### Internal
+
+The server provides three way to authenticate users:
+* Internal: users are stored in the configuration file
+* HTTP-based: an external HTTP URL is contacted to perform authentication
+* JWT: an external identity server provides authentication through JWTs
+
+The internal authentication method is the default one. Users are stored inside the configuration file, in this format:
 
 ```yml
-pathDefaults:
-  publishUser: myuser
-  publishPass: mypass
+authInternalUsers:
+  # Username. 'any' means any user, including anonymous ones.
+- user: any
+  # Password. Not used in case of 'any' user.
+  pass:
+  # IPs or networks allowed to use this user. An empty list means any IP.
+  ips: []
+  # List of permissions.
+  permissions:
+    # Available actions are: publish, read, playback, api, metrics, pprof.
+  - action: publish
+    # Paths can be set to further restrict access to a specific path.
+    # An empty path means any path.
+    # Regular expressions can be used by using a tilde as prefix.
+    path:
+  - action: read
+    path:
+  - action: playback
+    path:
 ```
 
-Only publishers that provide both username and password will be able to proceed:
+Only clients that provide username and passwords will be able to perform a given action:
 
 ```
 ffmpeg -re -stream_loop -1 -i file.ts -c copy -f rtsp rtsp://myuser:mypass@localhost:8554/mystream
 ```
 
-It's possible to setup authentication for readers too:
-
-```yml
-pathDefaults:
-  readUser: myuser
-  readPass: mypass
-```
-
-If storing plain credentials in the configuration file is a security problem, username and passwords can be stored as hashed strings. The Argon2 and SHA256 hashing algorithms are supported.
-
-To use Argon2, the string must be hashed using Argon2id (recommended) or Argon2i:
+If storing plain credentials in the configuration file is a security problem, username and passwords can be stored as hashed strings. The Argon2 and SHA256 hashing algorithms are supported. To use Argon2, the string must be hashed using Argon2id (recommended) or Argon2i:
 
 ```
 echo -n "mypass" | argon2 saltItWithSalt -id -l 32 -e
@@ -1058,9 +1077,11 @@ echo -n "mypass" | argon2 saltItWithSalt -id -l 32 -e
 Then stored with the `argon2:` prefix:
 
 ```yml
-pathDefaults:
-  readUser: argon2:$argon2id$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$OGGO0eCMN0ievb4YGSzvS/H+Vajx1pcbUmtLp2tRqRU
-  readPass: argon2:$argon2i$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$oct3kOiFywTdDdt19kT07hdvmsPTvt9zxAUho2DLqZw
+authInternalUsers:
+- user: argon2:$argon2id$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$OGGO0eCMN0ievb4YGSzvS/H+Vajx1pcbUmtLp2tRqRU
+  pass: argon2:$argon2i$v=19$m=4096,t=3,p=1$MTIzNDU2Nzg$oct3kOiFywTdDdt19kT07hdvmsPTvt9zxAUho2DLqZw
+  permissions:
+  - action: publish
 ```
 
 To use SHA256, the string must be hashed with SHA256 and encoded with base64:
@@ -1072,16 +1093,21 @@ echo -n "mypass" | openssl dgst -binary -sha256 | openssl base64
 Then stored with the `sha256:` prefix:
 
 ```yml
-pathDefaults:
-  readUser: sha256:j1tsRqDEw9xvq/D7/9tMx6Jh/jMhk3UfjwIB2f1zgMo=
-  readPass: sha256:BdSWkrdV+ZxFBLUQQY7+7uv9RmiSVA8nrPmjGjJtZQQ=
+authInternalUsers:
+- user: sha256:j1tsRqDEw9xvq/D7/9tMx6Jh/jMhk3UfjwIB2f1zgMo=
+  pass: sha256:BdSWkrdV+ZxFBLUQQY7+7uv9RmiSVA8nrPmjGjJtZQQ=
+  permissions:
+  - action: publish
 ```
 
 **WARNING**: enable encryption or use a VPN to ensure that no one is intercepting the credentials in transit.
 
+#### HTTP-based
+
 Authentication can be delegated to an external HTTP server:
 
 ```yml
+authMethod: http
 externalAuthenticationURL: http://myauthserver/auth
 ```
 
@@ -1089,20 +1115,18 @@ Each time a user needs to be authenticated, the specified URL will be requested 
 
 ```json
 {
-  "ip": "ip",
   "user": "user",
   "password": "password",
+  "ip": "ip",
+  "action": "publish|read|playback|api|metrics|pprof",
   "path": "path",
-  "protocol": "rtsp|rtmp|hls|webrtc",
+  "protocol": "rtsp|rtmp|hls|webrtc|srt",
   "id": "id",
-  "action": "read|publish",
   "query": "query"
 }
 ```
 
-If the URL returns a status code that begins with `20` (i.e. `200`), authentication is successful, otherwise it fails.
-
-Please be aware that it's perfectly normal for the authentication server to receive requests with empty users and passwords, i.e.:
+If the URL returns a status code that begins with `20` (i.e. `200`), authentication is successful, otherwise it fails. Be aware that it's perfectly normal for the authentication server to receive requests with empty users and passwords, i.e.:
 
 ```json
 {
@@ -1111,7 +1135,107 @@ Please be aware that it's perfectly normal for the authentication server to rece
 }
 ```
 
-This happens because a RTSP client doesn't provide credentials until it is asked to. In order to receive the credentials, the authentication server must reply with status code `401`, then the client will send credentials.
+This happens because RTSP clients don't provide credentials until they are asked to. In order to receive the credentials, the authentication server must reply with status code `401`, then the client will send credentials.
+
+Some actions can be excluded from the process:
+
+```yml
+# Actions to exclude from HTTP-based authentication.
+# Format is the same as the one of user permissions.
+authHTTPExclude:
+- action: api
+- action: metrics
+- action: pprof
+```
+
+#### JWT-based
+
+Authentication can be delegated to an external identity server, that is capable of generating JWTs and provides a JWKS endpoint. With respect to the HTTP-based method, this has the advantage that the external server is contacted just once, and not for every request, greatly improving performance. In order to use the JWT-based authentication method, set `authMethod` and `authJWTJWKS`:
+
+```yml
+authMethod: jwt
+authJWTJWKS: http://my_identity_server/jwks_endpoint
+```
+
+The JWT is expected to contain the `mediamtx_permissions` scope, with a list of permissions in the same format as the one of user permissions:
+
+```json
+{
+ "mediamtx_permissions": [
+    {
+      "action": "publish",
+      "path": ""
+    }
+  ]
+}
+```
+
+Clients are expected to pass the JWT in query parameters, for instance:
+
+```
+ffmpeg -re -stream_loop -1 -i file.ts -c copy -f rtsp rtsp://localhost:8554/mystream?jwt=MY_JWT
+```
+
+Here's a tutorial on how to setup the [Keycloak identity server](https://www.keycloak.org/) in order to provide such JWTs:
+
+1. Start Keycloak:
+
+   ```
+   docker run --name=keycloak -p 8080:8080 -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=admin quay.io/keycloak/keycloak:23.0.7 start-dev
+   ```
+
+2. Open the Keycloak administration console on http://localhost:8080, click on _master_ in the top left corner, _create realm_, set realm name to `mediamtx`, Save
+
+3. Open page _Client scopes_, _create client scope_, set name to `mediamtx`, Save
+
+4. Open tab _Mappers_, _Configure a new Mapper_, _User Attribute_
+
+   * Name: `mediamtx_permissions`
+   * User Attribute: `mediamtx_permissions`
+   * Token Claim Name: `mediamtx_permissions`
+   * Claim JSON Type: `JSON`
+   * Multivalued: `On`
+
+   Save
+
+5. Open page _Clients_, _Create client_, set Client ID to `mediamtx`, Next, Client authentication `On`, Next, Save
+
+6. Open tab _Credentials_, copy client secret somewhere
+
+7. Open tab _Client scopes_, _Add client scope_, Select `mediamtx`, Add, Default
+
+8. Open page _Users_, _Create user_, Username `testuser`, Tab credentials, _Set password_, pick a password, Save
+
+9. Open tab _Attributes_, _Add an attribute_
+
+   * Key: `mediamtx_permissions`
+   * Value: `{"action":"publish", "paths": "all"}`
+
+   You can add as many attributes with key `mediamtx_permissions` as you want, each with a single permission in it
+
+10. In MediaMTX, use the following URL:
+
+    ```yml
+    authJWTJWKS: http://localhost:8080/realms/mediamtx/protocol/openid-connect/certs
+    ```
+
+11. Perform authentication on Keycloak:
+
+    ```
+    curl \
+    -d "client_id=mediamtx" \
+    -d "client_secret=$CLIENT_SECRET" \
+    -d "username=$USER" \
+    -d "password=$PASS" \
+    -d "grant_type=password" \
+    http://localhost:8080/realms/mediamtx/protocol/openid-connect/token
+    ```
+
+    The JWT is inside the `access_token` key of the response:
+
+    ```json
+    {"access_token":"eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIyNzVjX3ptOVlOdHQ0TkhwWVk4Und6ZndUclVGSzRBRmQwY3lsM2wtY3pzIn0.eyJleHAiOjE3MDk1NTUwOTIsImlhdCI6MTcwOTU1NDc5MiwianRpIjoiMzE3ZTQ1NGUtNzczMi00OTM1LWExNzAtOTNhYzQ2ODhhYWIxIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9tZWRpYW10eCIsImF1ZCI6ImFjY291bnQiLCJzdWIiOiI2NTBhZDA5Zi03MDgxLTQyNGItODI4Ni0xM2I3YTA3ZDI0MWEiLCJ0eXAiOiJCZWFyZXIiLCJhenAiOiJtZWRpYW10eCIsInNlc3Npb25fc3RhdGUiOiJjYzJkNDhjYy1kMmU5LTQ0YjAtODkzZS0wYTdhNjJiZDI1YmQiLCJhY3IiOiIxIiwiYWxsb3dlZC1vcmlnaW5zIjpbIi8qIl0sInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsInVtYV9hdXRob3JpemF0aW9uIiwiZGVmYXVsdC1yb2xlcy1tZWRpYW10eCJdfSwicmVzb3VyY2VfYWNjZXNzIjp7ImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoibWVkaWFtdHggcHJvZmlsZSBlbWFpbCIsInNpZCI6ImNjMmQ0OGNjLWQyZTktNDRiMC04OTNlLTBhN2E2MmJkMjViZCIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRocyI6ImFsbCJ9XSwicHJlZmVycmVkX3VzZXJuYW1lIjoidGVzdHVzZXIifQ.Gevz7rf1qHqFg7cqtSfSP31v_NS0VH7MYfwAdra1t6Yt5rTr9vJzqUeGfjYLQWR3fr4XC58DrPOhNnILCpo7jWRdimCnbPmuuCJ0AYM-Aoi3PAsWZNxgmtopq24_JokbFArY9Y1wSGFvF8puU64lt1jyOOyxf2M4cBHCs_EarCKOwuQmEZxSf8Z-QV9nlfkoTUszDCQTiKyeIkLRHL2Iy7Fw7_T3UI7sxJjVIt0c6HCNJhBBazGsYzmcSQ_GrmhbUteMTg00o6FicqkMBe99uZFnx9wIBm_QbO9hbAkkzF923I-DTAQrFLxT08ESMepDwmzFrmnwWYBLE3u8zuUlCA","expires_in":300,"refresh_expires_in":1800,"refresh_token":"eyJhbGciOiJIUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICI3OTI3Zjg4Zi05YWM4LTRlNmEtYWE1OC1kZmY0MDQzZDRhNGUifQ.eyJleHAiOjE3MDk1NTY1OTIsImlhdCI6MTcwOTU1NDc5MiwianRpIjoiMGVhZWFhMWItYzNhMC00M2YxLWJkZjAtZjI2NTRiODlkOTE3IiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9tZWRpYW10eCIsImF1ZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6ODA4MC9yZWFsbXMvbWVkaWFtdHgiLCJzdWIiOiI2NTBhZDA5Zi03MDgxLTQyNGItODI4Ni0xM2I3YTA3ZDI0MWEiLCJ0eXAiOiJSZWZyZXNoIiwiYXpwIjoibWVkaWFtdHgiLCJzZXNzaW9uX3N0YXRlIjoiY2MyZDQ4Y2MtZDJlOS00NGIwLTg5M2UtMGE3YTYyYmQyNWJkIiwic2NvcGUiOiJtZWRpYW10eCBwcm9maWxlIGVtYWlsIiwic2lkIjoiY2MyZDQ4Y2MtZDJlOS00NGIwLTg5M2UtMGE3YTYyYmQyNWJkIn0.yuXV8_JU0TQLuosNdp5xlYMjn7eO5Xq-PusdHzE7bsQ","token_type":"Bearer","not-before-policy":0,"session_state":"cc2d48cc-d2e9-44b0-893e-0a7a62bd25bd","scope":"mediamtx profile email"}
+    ```
 
 ### Encrypt the configuration
 
@@ -1191,41 +1315,59 @@ To upload recordings to a remote location, you can use _MediaMTX_ together with 
 
    If you want to delete local segments after they are uploaded, replace `rclone sync` with `rclone move`.
 
-### Playback recordings
+### Playback recorded streams
 
-Recordings can be served to users through a dedicated HTTP server, that can be enabled inside the configuration:
+Existing recordings can be served to users through a dedicated HTTP server, that can be enabled inside the configuration:
 
 ```yml
 playback: yes
 playbackAddress: :9996
 ```
 
-The server can be queried for recordings by using the URL:
+The server provides an endpoint to list recorded timespans:
 
 ```
-http://localhost:9996/get?path=[mypath]&start=[start_date]&duration=[duration]&format=[format]
+http://localhost:9996/list?path=[mypath]
+```
+
+Where [mypath] is the name of a path. The server will return a list of timespans in JSON format:
+
+```json
+[
+  {
+    "start": "2006-01-02T15:04:05Z07:00",
+    "duration": "60.0"
+  },
+  {
+    "start": "2006-01-02T15:07:05Z07:00",
+    "duration": "32.33"
+  }
+]
+```
+
+The server provides an endpoint for downloading recordings:
+
+```
+http://localhost:9996/get?path=[mypath]&start=[start_date]&duration=[duration]
 ```
 
 Where:
 
 * [mypath] is the path name
-* [start_date] is the start date in RFC3339 format
-* [duration] is the maximum duration of the recording in Golang format (example: 20s, 20h)
-* [format] must be fmp4
+* [start_date] is the start date in [RFC3339 format](https://www.utctime.net/)
+* [duration] is the maximum duration of the recording in seconds
 
-All parameters must be [url-encoded](https://www.urlencoder.org/).
-
-For instance:
+All parameters must be [url-encoded](https://www.urlencoder.org/). For instance:
 
 ```
-http://localhost:9996/get?path=stream2&start=2024-01-14T16%3A33%3A17%2B00%3A00&duration=200s&format=fmp4
+http://localhost:9996/get?path=stream2&start=2024-01-14T16%3A33%3A17%2B00%3A00&duration=200.5
 ```
 
-The resulting stream is natively compatible with any browser, therefore its URL can be directly inserted into a \<video> tag:
+The resulting stream uses the fMP4 format, that is natively compatible with any browser, therefore its URL can be directly inserted into a \<video> tag:
 
 ```html
 <video controls>
-  <source src="http://localhost:9996/get?path=stream2&start=2024-01-14T16%3A33%3A17%2B00%3A00&duration=200s&format=fmp4" type="video/mp4" />
+  <source src="http://localhost:9996/get?path=[mypath]&start=[start_date]&duration=[duration]" type="video/mp4" />
 </video>
 ```
 
@@ -1523,9 +1665,9 @@ pathDefaults:
   runOnRecordSegmentComplete: curl http://my-custom-server/webhook?path=$MTX_PATH&segment_path=$MTX_SEGMENT_PATH
 ```
 
-### API
+### Control API
 
-The server can be queried and controlled with its API, that must be enabled by setting the `api` parameter in the configuration:
+The server can be queried and controlled with an API, that must be enabled by setting the `api` parameter in the configuration:
 
 ```yml
 api: yes
@@ -1537,7 +1679,7 @@ The API listens on `apiAddress`, that by default is `127.0.0.1:9997`; for instan
 curl http://127.0.0.1:9997/v2/paths/list
 ```
 
-Full documentation of the API is available on the [dedicated site](https://bluenviron.github.io/mediamtx/).
+Full documentation of the Control API is available on the [dedicated site](https://bluenviron.github.io/mediamtx/).
 
 ### Metrics
 
@@ -1591,8 +1733,57 @@ rtmps_conns_bytes_sent{id="[id]",state="[state]"} 187
 
 # metrics of every SRT connection
 srt_conns{id="[id]",state="[state]"} 1
-srt_conns_bytes_received{id="[id]",state="[state]"} 1234
+srt_conns_packets_sent{id="[id]",state="[state]"} 123
+srt_conns_packets_received{id="[id]",state="[state]"} 123
+srt_conns_packets_sent_unique{id="[id]",state="[state]"} 123
+srt_conns_packets_received_unique{id="[id]",state="[state]"} 123
+srt_conns_packets_send_loss{id="[id]",state="[state]"} 123
+srt_conns_packets_received_loss{id="[id]",state="[state]"} 123
+srt_conns_packets_retrans{id="[id]",state="[state]"} 123
+srt_conns_packets_received_retrans{id="[id]",state="[state]"} 123
+srt_conns_packets_sent_ack{id="[id]",state="[state]"} 123
+srt_conns_packets_received_ack{id="[id]",state="[state]"} 123
+srt_conns_packets_sent_nak{id="[id]",state="[state]"} 123
+srt_conns_packets_received_nak{id="[id]",state="[state]"} 123
+srt_conns_packets_sent_km{id="[id]",state="[state]"} 123
+srt_conns_packets_received_km{id="[id]",state="[state]"} 123
+srt_conns_us_snd_duration{id="[id]",state="[state]"} 123
+srt_conns_packets_send_drop{id="[id]",state="[state]"} 123
+srt_conns_packets_received_drop{id="[id]",state="[state]"} 123
+srt_conns_packets_received_undecrypt{id="[id]",state="[state]"} 123
 srt_conns_bytes_sent{id="[id]",state="[state]"} 187
+srt_conns_bytes_received{id="[id]",state="[state]"} 1234
+srt_conns_bytes_sent_unique{id="[id]",state="[state]"} 123
+srt_conns_bytes_received_unique{id="[id]",state="[state]"} 123
+srt_conns_bytes_received_loss{id="[id]",state="[state]"} 123
+srt_conns_bytes_retrans{id="[id]",state="[state]"} 123
+srt_conns_bytes_received_retrans{id="[id]",state="[state]"} 123
+srt_conns_bytes_send_drop{id="[id]",state="[state]"} 123
+srt_conns_bytes_received_drop{id="[id]",state="[state]"} 123
+srt_conns_bytes_received_undecrypt{id="[id]",state="[state]"} 123
+srt_conns_us_packets_send_period{id="[id]",state="[state]"} 123.123
+srt_conns_packets_flow_window{id="[id]",state="[state]"} 123
+srt_conns_packets_flight_size{id="[id]",state="[state]"} 123
+srt_conns_ms_rtt{id="[id]",state="[state]"} 123.123
+srt_conns_mbps_send_rate{id="[id]",state="[state]"} 123
+srt_conns_mbps_receive_rate{id="[id]",state="[state]"} 123.123
+srt_conns_mbps_link_capacity{id="[id]",state="[state]"} 123.123
+srt_conns_bytes_avail_send_buf{id="[id]",state="[state]"} 123
+srt_conns_bytes_avail_receive_buf{id="[id]",state="[state]"} 123
+srt_conns_mbps_max_bw{id="[id]",state="[state]"} -123
+srt_conns_bytes_mss{id="[id]",state="[state]"} 123
+srt_conns_packets_send_buf{id="[id]",state="[state]"} 123
+srt_conns_bytes_send_buf{id="[id]",state="[state]"} 123
+srt_conns_ms_send_buf{id="[id]",state="[state]"} 123
+srt_conns_ms_send_tsb_pd_delay{id="[id]",state="[state]"} 123
+srt_conns_packets_receive_buf{id="[id]",state="[state]"} 123
+srt_conns_bytes_receive_buf{id="[id]",state="[state]"} 123
+srt_conns_ms_receive_buf{id="[id]",state="[state]"} 123
+srt_conns_ms_receive_tsb_pd_delay{id="[id]",state="[state]"} 123
+srt_conns_packets_reorder_tolerance{id="[id]",state="[state]"} 123
+srt_conns_packets_received_avg_belated_time{id="[id]",state="[state]"} 123
+srt_conns_packets_send_loss_rate{id="[id]",state="[state]"} 123
+srt_conns_packets_received_loss_rate{id="[id]",state="[state]"} 123
 
 # metrics of every WebRTC session
 webrtc_sessions{id="[id]",state="[state]"} 1
@@ -1787,6 +1978,7 @@ Install git and Go &ge; 1.21. Clone the repository, enter into the folder and st
 ```sh
 git clone https://github.com/bluenviron/mediamtx
 cd mediamtx
+go generate ./...
 CGO_ENABLED=0 go build .
 ```
 
@@ -1807,6 +1999,7 @@ Download the repository, open a terminal in it and run:
 cd internal/protocols/rpicamera/exe
 make
 cd ../../../../
+go generate ./...
 go build -tags rpicamera .
 ```
 
@@ -1826,6 +2019,7 @@ Clone the repository, enter into the folder and start the building process:
 ```sh
 git clone https://github.com/bluenviron/mediamtx
 cd mediamtx
+go generate ./...
 CGO_ENABLED=0 go build .
 ```
 
@@ -1842,6 +2036,7 @@ On the machine you want to use to compile, install git and Go &ge; 1.21. Clone t
 ```sh
 git clone https://github.com/bluenviron/mediamtx
 cd mediamtx
+go generate ./...
 CGO_ENABLED=0 GOOS=my_os GOARCH=my_arch go build .
 ```
 
@@ -1881,6 +2076,13 @@ make binaries
 
 The command will produce tarballs in folder `binaries/`.
 
+## License
+
+All the code in this repository is released under the [MIT License](LICENSE). Compiled binaries make use of some third-party dependencies:
+
+* hls.js, released under the [Apache License 2.0](https://github.com/video-dev/hls.js/blob/master/LICENSE)
+* all the dependencies listed into the [go.mod file](go.mod), which are all released under either the MIT license, BSD-3-Clause license or Apache License 2.0
+
 ## Specifications
 
 |name|area|
@@ -1889,6 +2091,7 @@ The command will produce tarballs in folder `binaries/`.
 |[HLS specifications](https://github.com/bluenviron/gohlslib#specifications)|HLS|
 |[RTMP](https://rtmp.veriskope.com/pdf/rtmp_specification_1.0.pdf)|RTMP|
 |[Enhanced RTMP](https://raw.githubusercontent.com/veovera/enhanced-rtmp/main/enhanced-rtmp-v1.pdf)|RTMP|
+|[Action Message Format](https://rtmp.veriskope.com/pdf/amf0-file-format-specification.pdf)|RTMP|
 |[WebRTC: Real-Time Communication in Browsers](https://www.w3.org/TR/webrtc/)|WebRTC|
 |[WebRTC HTTP Ingestion Protocol (WHIP)](https://datatracker.ietf.org/doc/draft-ietf-wish-whip/)|WebRTC|
 |[WebRTC HTTP Egress Protocol (WHEP)](https://datatracker.ietf.org/doc/draft-murillo-whep/)|WebRTC|
@@ -1906,7 +2109,6 @@ The command will produce tarballs in folder `binaries/`.
 * [pion/sdp (SDP library used internally)](https://github.com/pion/sdp)
 * [pion/rtp (RTP library used internally)](https://github.com/pion/rtp)
 * [pion/rtcp (RTCP library used internally)](https://github.com/pion/rtcp)
-* [notedit/rtmp (RTMP library used internally)](https://github.com/notedit/rtmp)
 * [go-astits (MPEG-TS library used internally)](https://github.com/asticode/go-astits)
 * [go-mp4 (MP4 library used internally)](https://github.com/abema/go-mp4)
 * [hls.js (browser-side HLS library used internally)](https://github.com/video-dev/hls.js)

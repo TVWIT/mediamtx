@@ -14,10 +14,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
-	"github.com/bluenviron/mediamtx/internal/protocols/httpserv"
+	"github.com/bluenviron/mediamtx/internal/protocols/httpp"
 	"github.com/bluenviron/mediamtx/internal/protocols/webrtc"
 	"github.com/bluenviron/mediamtx/internal/restrictnetwork"
 )
@@ -56,12 +57,12 @@ type httpServer struct {
 	serverKey      string
 	serverCert     string
 	allowOrigin    string
-	trustedProxies conf.IPsOrCIDRs
+	trustedProxies conf.IPNetworks
 	readTimeout    conf.StringDuration
-	pathManager    defs.PathManager
+	pathManager    serverPathManager
 	parent         *Server
 
-	inner *httpserv.WrappedServer
+	inner *httpp.WrappedServer
 }
 
 func (s *httpServer) initialize() error {
@@ -81,7 +82,7 @@ func (s *httpServer) initialize() error {
 	network, address := restrictnetwork.Restrict("tcp", s.address)
 
 	var err error
-	s.inner, err = httpserv.NewWrappedServer(
+	s.inner, err = httpp.NewWrappedServer(
 		network,
 		address,
 		time.Duration(s.readTimeout),
@@ -107,41 +108,38 @@ func (s *httpServer) close() {
 }
 
 func (s *httpServer) checkAuthOutsideSession(ctx *gin.Context, path string, publish bool) bool {
-	ip := ctx.ClientIP()
-	_, port, _ := net.SplitHostPort(ctx.Request.RemoteAddr)
-	remoteAddr := net.JoinHostPort(ip, port)
 	user, pass, hasCredentials := ctx.Request.BasicAuth()
 
-	res := s.pathManager.FindPathConf(defs.PathFindPathConfReq{
+	_, err := s.pathManager.FindPathConf(defs.PathFindPathConfReq{
 		AccessRequest: defs.PathAccessRequest{
 			Name:    path,
 			Query:   ctx.Request.URL.RawQuery,
 			Publish: publish,
-			IP:      net.ParseIP(ip),
+			IP:      net.ParseIP(ctx.ClientIP()),
 			User:    user,
 			Pass:    pass,
-			Proto:   defs.AuthProtocolWebRTC,
+			Proto:   auth.ProtocolWebRTC,
 		},
 	})
-	if res.Err != nil {
-		var terr defs.AuthenticationError
-		if errors.As(res.Err, &terr) {
+	if err != nil {
+		var terr auth.Error
+		if errors.As(err, &terr) {
 			if !hasCredentials {
 				ctx.Header("WWW-Authenticate", `Basic realm="mediamtx"`)
 				ctx.Writer.WriteHeader(http.StatusUnauthorized)
 				return false
 			}
 
-			s.Log(logger.Info, "connection %v failed to authenticate: %v", remoteAddr, terr.Message)
+			s.Log(logger.Info, "connection %v failed to authenticate: %v", httpp.RemoteAddr(ctx), terr.Message)
 
 			// wait some seconds to mitigate brute force attacks
-			<-time.After(pauseAfterAuthError)
+			<-time.After(auth.PauseAfterError)
 
 			writeError(ctx, http.StatusUnauthorized, terr)
 			return false
 		}
 
-		writeError(ctx, http.StatusInternalServerError, res.Err)
+		writeError(ctx, http.StatusInternalServerError, err)
 		return false
 	}
 
@@ -177,14 +175,11 @@ func (s *httpServer) onWHIPPost(ctx *gin.Context, path string, publish bool) {
 		return
 	}
 
-	ip := ctx.ClientIP()
-	_, port, _ := net.SplitHostPort(ctx.Request.RemoteAddr)
-	remoteAddr := net.JoinHostPort(ip, port)
 	user, pass, _ := ctx.Request.BasicAuth()
 
 	res := s.parent.newSession(webRTCNewSessionReq{
 		pathName:   path,
-		remoteAddr: remoteAddr,
+		remoteAddr: httpp.RemoteAddr(ctx),
 		query:      ctx.Request.URL.RawQuery,
 		user:       user,
 		pass:       pass,
@@ -336,7 +331,7 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 				s.onPage(ctx, ctx.Request.URL.Path[1:len(ctx.Request.URL.Path)-len("/publish")], true)
 
 			case ctx.Request.URL.Path[len(ctx.Request.URL.Path)-1] != '/':
-				ctx.Writer.Header().Set("Location", httpserv.LocationWithTrailingSlash(ctx.Request.URL))
+				ctx.Writer.Header().Set("Location", httpp.LocationWithTrailingSlash(ctx.Request.URL))
 				ctx.Writer.WriteHeader(http.StatusMovedPermanently)
 
 			default:

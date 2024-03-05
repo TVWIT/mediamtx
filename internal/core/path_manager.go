@@ -6,10 +6,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/stream"
 )
 
 func pathConfCanBeUpdated(oldPathConf *conf.Path, newPathConf *conf.Path) bool {
@@ -23,6 +25,7 @@ func pathConfCanBeUpdated(oldPathConf *conf.Path, newPathConf *conf.Path) bool {
 	clone.RPICameraSharpness = newPathConf.RPICameraSharpness
 	clone.RPICameraExposure = newPathConf.RPICameraExposure
 	clone.RPICameraAWB = newPathConf.RPICameraAWB
+	clone.RPICameraAWBGains = newPathConf.RPICameraAWBGains
 	clone.RPICameraDenoise = newPathConf.RPICameraDenoise
 	clone.RPICameraShutter = newPathConf.RPICameraShutter
 	clone.RPICameraMetering = newPathConf.RPICameraMetering
@@ -45,17 +48,16 @@ type pathManagerParent interface {
 }
 
 type pathManager struct {
-	logLevel                  conf.LogLevel
-	externalAuthenticationURL string
-	rtspAddress               string
-	authMethods               conf.AuthMethods
-	readTimeout               conf.StringDuration
-	writeTimeout              conf.StringDuration
-	writeQueueSize            int
-	udpMaxPayloadSize         int
-	pathConfs                 map[string]*conf.Path
-	externalCmdPool           *externalcmd.Pool
-	parent                    pathManagerParent
+	logLevel          conf.LogLevel
+	authManager       *auth.Manager
+	rtspAddress       string
+	readTimeout       conf.StringDuration
+	writeTimeout      conf.StringDuration
+	writeQueueSize    int
+	udpMaxPayloadSize int
+	pathConfs         map[string]*conf.Path
+	externalCmdPool   *externalcmd.Pool
+	parent            pathManagerParent
 
 	ctx         context.Context
 	ctxCancel   func()
@@ -234,8 +236,7 @@ func (pm *pathManager) doFindPathConf(req defs.PathFindPathConfReq) {
 		return
 	}
 
-	err = doAuthentication(pm.externalAuthenticationURL, pm.authMethods,
-		pathConf, req.AccessRequest)
+	err = pm.authManager.Authenticate(req.AccessRequest.ToAuthRequest())
 	if err != nil {
 		req.Res <- defs.PathFindPathConfRes{Err: err}
 		return
@@ -251,8 +252,7 @@ func (pm *pathManager) doDescribe(req defs.PathDescribeReq) {
 		return
 	}
 
-	err = doAuthentication(pm.externalAuthenticationURL, pm.authMethods,
-		pathConf, req.AccessRequest)
+	err = pm.authManager.Authenticate(req.AccessRequest.ToAuthRequest())
 	if err != nil {
 		req.Res <- defs.PathDescribeRes{Err: err}
 		return
@@ -274,8 +274,7 @@ func (pm *pathManager) doAddReader(req defs.PathAddReaderReq) {
 	}
 
 	if !req.AccessRequest.SkipAuth {
-		err = doAuthentication(pm.externalAuthenticationURL, pm.authMethods,
-			pathConf, req.AccessRequest)
+		err = pm.authManager.Authenticate(req.AccessRequest.ToAuthRequest())
 		if err != nil {
 			req.Res <- defs.PathAddReaderRes{Err: err}
 			return
@@ -298,8 +297,7 @@ func (pm *pathManager) doAddPublisher(req defs.PathAddPublisherReq) {
 	}
 
 	if !req.AccessRequest.SkipAuth {
-		err = doAuthentication(pm.externalAuthenticationURL, pm.authMethods,
-			pathConf, req.AccessRequest)
+		err = pm.authManager.Authenticate(req.AccessRequest.ToAuthRequest())
 		if err != nil {
 			req.Res <- defs.PathAddPublisherRes{Err: err}
 			return
@@ -410,14 +408,15 @@ func (pm *pathManager) closePath(pa *path) {
 }
 
 // GetConfForPath is called by a reader or publisher.
-func (pm *pathManager) FindPathConf(req defs.PathFindPathConfReq) defs.PathFindPathConfRes {
+func (pm *pathManager) FindPathConf(req defs.PathFindPathConfReq) (*conf.Path, error) {
 	req.Res = make(chan defs.PathFindPathConfRes)
 	select {
 	case pm.chFindPathConf <- req:
-		return <-req.Res
+		res := <-req.Res
+		return res.Conf, res.Err
 
 	case <-pm.ctx.Done():
-		return defs.PathFindPathConfRes{Err: fmt.Errorf("terminated")}
+		return nil, fmt.Errorf("terminated")
 	}
 }
 
@@ -445,36 +444,36 @@ func (pm *pathManager) Describe(req defs.PathDescribeReq) defs.PathDescribeRes {
 }
 
 // AddPublisher is called by a publisher.
-func (pm *pathManager) AddPublisher(req defs.PathAddPublisherReq) defs.PathAddPublisherRes {
+func (pm *pathManager) AddPublisher(req defs.PathAddPublisherReq) (defs.Path, error) {
 	req.Res = make(chan defs.PathAddPublisherRes)
 	select {
 	case pm.chAddPublisher <- req:
 		res := <-req.Res
 		if res.Err != nil {
-			return res
+			return nil, res.Err
 		}
 
 		return res.Path.(*path).addPublisher(req)
 
 	case <-pm.ctx.Done():
-		return defs.PathAddPublisherRes{Err: fmt.Errorf("terminated")}
+		return nil, fmt.Errorf("terminated")
 	}
 }
 
 // AddReader is called by a reader.
-func (pm *pathManager) AddReader(req defs.PathAddReaderReq) defs.PathAddReaderRes {
+func (pm *pathManager) AddReader(req defs.PathAddReaderReq) (defs.Path, *stream.Stream, error) {
 	req.Res = make(chan defs.PathAddReaderRes)
 	select {
 	case pm.chAddReader <- req:
 		res := <-req.Res
 		if res.Err != nil {
-			return res
+			return nil, nil, res.Err
 		}
 
 		return res.Path.(*path).addReader(req)
 
 	case <-pm.ctx.Done():
-		return defs.PathAddReaderRes{Err: fmt.Errorf("terminated")}
+		return nil, nil, fmt.Errorf("terminated")
 	}
 }
 
